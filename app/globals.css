@@ -1,0 +1,219 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 200 25% 26%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 200 25% 26%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 200 25% 26%;
+
+    --primary: 200 30% 43%;
+    --primary-foreground: 40 50% 94%;
+
+    --secondary: 40 50% 94%;
+    --secondary-foreground: 200 30% 43%;
+
+    --muted: 200 40% 95%;
+    --muted-foreground: 200 30% 35%;
+
+    --accent: 200 35% 54%;
+    --accent-foreground: 40 50% 94%;
+
+    --destructive: 0 40% 50%;
+    --destructive-foreground: 40 50% 94%;
+
+    --border: 200 30% 88%;
+    --input: 200 30% 88%;
+    --ring: 200 30% 43%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 200 25% 15%;
+    --foreground: 40 50% 94%;
+
+    --card: 200 25% 18%;
+    --card-foreground: 40 50% 94%;
+
+    --popover: 200 25% 18%;
+    --popover-foreground: 40 50% 94%;
+
+    --primary: 200 30% 43%;
+    --primary-foreground: 40 50% 94%;
+
+    --secondary: 40 50% 94%;
+    --secondary-foreground: 200 30% 43%;
+
+    --muted: 200 25% 25%;
+    --muted-foreground: 200 20% 80%;
+
+    --accent: 200 35% 35%;
+    --accent-foreground: 40 50% 94%;
+
+    --destructive: 0 40% 45%;
+    --destructive-foreground: 40 50% 94%;
+
+    --border: 200 25% 30%;
+    --input: 200 25% 30%;
+    --ring: 200 30% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Custom styles for sidebar */
+.bg-sidebar {
+  background-color: #4e7a8e;
+  color: #f7f4e9;
+}
+
+.text-sidebar-foreground {
+  color: #f7f4e9;
+}
+
+.bg-sidebar-accent {
+  background-color: #3e6272;
+}
+
+.text-sidebar-accent-foreground {
+  color: #f7f4e9;
+}
+
+.border-sidebar-border {
+  border-color: #3e6272;
+}
+
+/* Custom styles for dashboard */
+.dashboard-card {
+  background-color: #f7f4e9;
+  border: 1px solid #d6e4ea;
+}
+
+.dashboard-header {
+  background-color: #4e7a8e;
+  color: #f7f4e9;
+}
+
+/* Custom button styles */
+.btn-primary {
+  background-color: #4e7a8e;
+  color: #f7f4e9;
+}
+
+.btn-primary:hover {
+  background-color: #3e6272;
+}
+
+.btn-secondary {
+  background-color: #f7f4e9;
+  color: #4e7a8e;
+  border: 1px solid #4e7a8e;
+}
+
+.btn-secondary:hover {
+  background-color: #ede6d0;
+}
+
+/* Fix for transparent dropdowns */
+[data-radix-popper-content-wrapper] {
+  background-color: white !important;
+}
+
+.dark [data-radix-popper-content-wrapper] {
+  background-color: hsl(var(--card)) !important;
+}
+
+[data-radix-select-content] {
+  background-color: white !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+.dark [data-radix-select-content] {
+  background-color: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+/* Fix for select items */
+[data-radix-select-item] {
+  background-color: transparent !important;
+}
+
+[data-radix-select-item][data-highlighted] {
+  background-color: hsl(var(--muted)) !important;
+}
+
+/* Calendar styles */
+.rdp {
+  --rdp-cell-size: 40px;
+  --rdp-accent-color: hsl(var(--primary));
+  --rdp-background-color: hsl(var(--primary) / 0.1);
+  --rdp-accent-color-dark: hsl(var(--primary));
+  --rdp-background-color-dark: hsl(var(--primary) / 0.2);
+  --rdp-outline: 2px solid var(--rdp-accent-color);
+  --rdp-outline-selected: 2px solid var(--rdp-accent-color);
+  margin: 0;
+}
+
+.rdp-day_selected,
+.rdp-day_selected:focus-visible,
+.rdp-day_selected:hover {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+.rdp-day_today {
+  background-color: hsl(var(--accent)) !important;
+  color: hsl(var(--accent-foreground)) !important;
+  font-weight: bold;
+}
+
+.rdp-button:hover:not([disabled]):not(.rdp-day_selected) {
+  background-color: hsl(var(--muted)) !important;
+}
+
+/* Ensure calendar popover is visible */
+[data-radix-popper-content-wrapper] {
+  z-index: 9999 !important;
+}
+
+.rdp {
+  margin: 0;
+}
+
+.rdp-months {
+  background-color: white;
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.dark .rdp-months {
+  background-color: hsl(var(--card));
+}
+
+.rdp-day_selected,
+.rdp-day_selected:focus-visible,
+.rdp-day_selected:hover {
+  background-color: hsl(var(--primary));
+  color: white;
+}
+
+.rdp-day_today {
+  font-weight: bold;
+  text-decoration: underline;
+}

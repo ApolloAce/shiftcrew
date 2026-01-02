@@ -1,0 +1,275 @@
+"use client"
+
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useCrewStore } from "@/lib/cleanStore"
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, subWeeks, addWeeks, parseISO } from "date-fns"
+import { ChevronLeft, ChevronRight } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+
+export default function EmployeeSchedulePage() {
+  const { getSchedulesForCrew, branches } = useCrewStore()
+  const [currentUser, setCurrentUser] = useState<{ id: number } | null>(null)
+  const [currentDate, setCurrentDate] = useState(new Date())
+  const [weekSchedules, setWeekSchedules] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // Demo auto-population removed so the app starts with an empty store and no local mock data.
+
+  // Memoize date calculations to prevent recalculation on every render
+  const { startOfCurrentWeek, endOfCurrentWeek, weekDays } = useMemo(() => {
+    const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 }) // Start on Monday
+    const endOfWeekDate = endOfWeek(currentDate, { weekStartsOn: 1 })
+
+    const days = eachDayOfInterval({
+      start: startOfWeekDate,
+      end: endOfWeekDate,
+    })
+
+    return {
+      startOfCurrentWeek: startOfWeekDate,
+      endOfCurrentWeek: endOfWeekDate,
+      weekDays: days,
+    }
+  }, [currentDate])
+
+  // Memoize the getBranchName function to prevent unnecessary re-renders
+  const getBranchName = useCallback(
+    (branchId: number) => {
+      try {
+        const branch = branches.find((b) => b.id === branchId)
+        return branch ? branch.branchName : "Unknown Branch"
+      } catch (error) {
+        console.error("Error getting branch name:", error)
+        return "Unknown Branch"
+      }
+    },
+    [branches],
+  )
+
+  // First effect to get the current user - runs only once
+  useEffect(() => {
+    // Get current user from session storage
+    const user = sessionStorage.getItem("currentUser")
+    if (!user) return
+
+    try {
+      const userData = JSON.parse(user)
+      setCurrentUser(userData)
+    } catch (error) {
+      console.error("Error loading user data:", error)
+      setError("Failed to load user data. Please try logging in again.")
+    }
+  }, [])
+
+  // Demo auto-population removed so the app starts with an empty store and no local mock data.
+
+  // Second effect to fetch schedules - runs when currentUser or currentDate changes
+  useEffect(() => {
+    if (!currentUser?.id) return
+
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      // Get all schedules for the crew member
+      const allSchedules = getSchedulesForCrew(currentUser.id)
+
+      // Filter schedules for the current week
+      const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 })
+      const endOfWeekDate = endOfWeek(currentDate, { weekStartsOn: 1 })
+
+      const filteredSchedules = allSchedules.filter((schedule) => {
+        try {
+          const scheduleDate = new Date(schedule.date)
+          return scheduleDate >= startOfWeekDate && scheduleDate <= endOfWeekDate
+        } catch (error) {
+          console.error("Error filtering schedule:", error)
+          return false
+        }
+      })
+
+  setWeekSchedules(filteredSchedules)
+    } catch (error) {
+      console.error("Error loading schedule data:", error)
+      setError("Failed to load schedule data. Please try again.")
+      setWeekSchedules([])
+    } finally {
+      setIsLoading(false)
+    }
+  }, [currentUser, currentDate, getSchedulesForCrew])
+
+  const handlePreviousWeek = () => {
+    setCurrentDate(subWeeks(currentDate, 1))
+  }
+
+  const handleNextWeek = () => {
+    setCurrentDate(addWeeks(currentDate, 1))
+  }
+
+  const handleToday = () => {
+    setCurrentDate(new Date())
+  }
+
+  const formatTime = (timeString: string) => {
+    if (!timeString) return "N/A"
+
+    try {
+      const [hours, minutes] = timeString.split(":")
+      const hour = Number.parseInt(hours, 10)
+      const period = hour >= 12 ? "PM" : "AM"
+      const formattedHour = hour % 12 || 12
+      return `${formattedHour}:${minutes} ${period}`
+    } catch (error) {
+      console.error("Error formatting time:", error)
+      return "N/A"
+    }
+  }
+
+  const getScheduleForDay = (date: Date) => {
+    try {
+      const dateString = format(date, "yyyy-MM-dd")
+      return weekSchedules.find((schedule) => schedule.date === dateString)
+    } catch (error) {
+      console.error("Error getting schedule for day:", error)
+      return undefined
+    }
+  }
+
+  const isToday = (date: Date) => {
+    const today = new Date()
+    return (
+      date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear()
+    )
+  }
+
+  // Show loading state
+  if (isLoading && !weekSchedules.length) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Weekly Schedule</h1>
+          <p className="text-muted-foreground">Loading your schedule...</p>
+        </div>
+        <div className="flex justify-center items-center h-64">
+          <div className="text-center">
+            <div className="text-lg font-medium">Loading schedule data...</div>
+            <div className="text-sm text-muted-foreground mt-2">Please wait</div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Weekly Schedule</h1>
+          <p className="text-muted-foreground">View your upcoming shifts</p>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700">
+          <p>{error}</p>
+          <Button variant="outline" className="mt-4" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Weekly Schedule</h1>
+        <p className="text-muted-foreground">View your upcoming shifts</p>
+      </div>
+
+      <div className="flex justify-between items-center">
+        <Button variant="outline" onClick={handlePreviousWeek}>
+          <ChevronLeft className="h-4 w-4 mr-2" />
+          Previous Week
+        </Button>
+        <div className="text-lg font-medium">
+          {format(startOfCurrentWeek, "MMM d")} - {format(endOfCurrentWeek, "MMM d, yyyy")}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleToday}>
+            Today
+          </Button>
+          <Button variant="outline" onClick={handleNextWeek}>
+            Next Week
+            <ChevronRight className="h-4 w-4 ml-2" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-7 gap-4">
+        {weekDays.map((day, index) => (
+          <div key={index} className="flex flex-col">
+            <div
+              className={`text-center p-2 font-medium ${isToday(day) ? "bg-primary text-primary-foreground rounded-t-md" : "bg-muted rounded-t-md"}`}
+            >
+              <div>{format(day, "EEE")}</div>
+              <div>{format(day, "d")}</div>
+            </div>
+            <Card className="flex-1 border-t-0 rounded-t-none">
+              <CardContent className="p-3">
+                {getScheduleForDay(day) ? (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">
+                      {formatTime(getScheduleForDay(day)?.startTime)} - {formatTime(getScheduleForDay(day)?.endTime)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {getBranchName(getScheduleForDay(day)?.branchId)}
+                    </div>
+                    {getScheduleForDay(day)?.notes && (
+                      <div className="text-xs mt-2 pt-2 border-t">{getScheduleForDay(day)?.notes}</div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-muted-foreground">No shift</div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Upcoming Shifts</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {weekSchedules.length > 0 ? (
+            <div className="space-y-4">
+              {weekSchedules
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .map((schedule) => (
+                  <div key={schedule.id} className="flex justify-between items-center p-4 border rounded-md">
+                    <div>
+                      <div className="font-medium">{format(parseISO(schedule.date), "EEEE, MMMM d, yyyy")}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
+                      </div>
+                      <div className="text-sm mt-1">{getBranchName(schedule.branchId)}</div>
+                    </div>
+                    <Badge variant={isToday(parseISO(schedule.date)) ? "default" : "outline"}>
+                      {isToday(parseISO(schedule.date)) ? "Today" : format(parseISO(schedule.date), "EEE")}
+                    </Badge>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center text-muted-foreground">No shifts scheduled for this week</div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
