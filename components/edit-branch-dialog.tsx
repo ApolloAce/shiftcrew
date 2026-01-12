@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 
 interface EditBranchDialogProps {
   initialBranch: {
-    id: number
+    id: string | number
     branchName: string
     address: string
   }

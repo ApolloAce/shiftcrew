@@ -9,11 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
 
 export default function RegistrationPage() {
   const { showNotification } = useNotification()
-  const { addCrew, crews } = useCrewStore()
   const [mode, setMode] = useState<"full-time" | "part-time">("full-time")
   const [formData, setFormData] = useState({
     firstName: "",
@@ -23,6 +21,8 @@ export default function RegistrationPage() {
     password: "",
     phone: "",
     address: "",
+    role: "employee",
+    type: mode,
     availability: [] as string[],
   })
 
@@ -50,62 +50,59 @@ export default function RegistrationPage() {
     })
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
 
     if (!formData.firstName || !formData.surname) {
-      showNotification("error", "Validation Error", "First name and surname are required")
-      return
+      showNotification("error", "Validation Error", "First name and surname are required");
+      return;
     }
-
     if (!formData.email) {
-      showNotification("error", "Validation Error", "Email is required for employee account")
-      return
+      showNotification("error", "Validation Error", "Email is required for employee account");
+      return;
     }
-
     if (!formData.password) {
-      showNotification("error", "Validation Error", "Password is required for employee account")
-      return
+      showNotification("error", "Validation Error", "Password is required for employee account");
+      return;
     }
 
-    // Check if email is already in use
-    const emailExists = crews.some((crew) => crew.email?.toLowerCase() === formData.email.toLowerCase())
-    if (emailExists) {
-      showNotification("error", "Validation Error", "Email is already in use")
-      return
+    try {
+      const res = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...formData, type: mode }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        showNotification(
+          "success",
+          "Employee Account Created",
+          `${formData.firstName} ${formData.surname} has been registered with login access.`
+        );
+
+        // Reset form
+        setFormData({
+          firstName: "",
+          surname: "",
+          nickname: "",
+          email: "",
+          password: "",
+          phone: "",
+          address: "",
+          role: "employee",
+          type: mode,
+          availability: [],
+        });
+      } else {
+        showNotification("error", "Registration Error", data.message || "Failed to register employee");
+      }
+    } catch (err) {
+      showNotification("error", "Server Error", "Could not connect to registration service");
     }
+  };
 
-    const newEmployee = {
-      ...formData,
-      type: mode,
-      id: Date.now(),
-      isPresent: false,
-      isEmployee: true,
-      status: "approved" as const, // Admin-created accounts are automatically approved
-      hireDate: new Date().toISOString().split("T")[0],
-      createdAt: new Date().toISOString(),
-    }
-
-    addCrew(newEmployee)
-
-    // Reset form
-    setFormData({
-      firstName: "",
-      surname: "",
-      nickname: "",
-      email: "",
-      password: "",
-      phone: "",
-      address: "",
-      availability: [],
-    })
-
-    showNotification(
-      "success",
-      "Employee Account Created",
-      `${formData.firstName} ${formData.surname} has been registered with login access.`,
-    )
-  }
 
   return (
     <div className="space-y-8">

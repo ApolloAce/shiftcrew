@@ -11,6 +11,9 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useNotification } from "@/components/notification-provider"
 import { useCrewStore } from "@/lib/cleanStore"
+import { getAllBranches as getBranchesFromFirestore } from "@/lib/firestore-branch-service"
+import { getActiveEmployees as getEmployeesFromFirestore } from "@/lib/firestore-employee-service"
+import { addSchedule as addScheduleToFirestore, getSchedulesForDate as getSchedulesForDateFromFirestore } from "@/lib/firestore-schedule-service"
 import { Search, RotateCcw, Edit, Calendar, Users, AlertTriangle, Clock } from "lucide-react"
 
 // Scheduling now uses live store data. No local sampleEmployees are present so the app starts empty.
@@ -20,35 +23,88 @@ import { Search, RotateCcw, Edit, Calendar, Users, AlertTriangle, Clock } from "
 
 export default function SchedulingPage() {
   const { showNotification } = useNotification()
-  const { branches, assignCrewToBranch, getCrewsForBranch, getActiveCrews, getAssignedBranch, addSchedule, getSchedulesForDate } = useCrewStore()
+  const { branches, assignCrewToBranch, getCrewsForBranch, getActiveCrews, getAssignedBranch } = useCrewStore()
 
-  const crews = getActiveCrews()
-  // derive a lightweight list of branches from the store; fall back to empty array
-  const branchesList = (branches || []).map((b: any) => ({ id: b.id, name: b.branchName, address: b.address }))
+  // retain store crews for compatibility with existing assignment logic
+  const storeCrews = getActiveCrews()
+
+  // Firestore-sourced data for branches and users (used for saving schedules and for UI where applicable)
+  const [fireBranches, setFireBranches] = useState<Array<any>>([])
+  const [fireEmployees, setFireEmployees] = useState<Array<any>>([])
+
+  // derive a lightweight list of branches for the rotation algorithm — prefer Firestore branches if available, otherwise fall back to store branches
+  const branchesList = (fireBranches.length > 0
+    ? fireBranches.map((b: any) => ({ id: b.id, name: b.branchName || b.name, address: b.address }))
+    : (branches || []).map((b: any) => ({ id: b.id, name: b.branchName, address: b.address })))
 
   // whether at least one crew has been assigned to a branch (used to require initial manual seeding)
+  const crews = storeCrews
   const hasInitialAssignments = crews.some((c) => (getAssignedBranch ? getAssignedBranch(c.id) : null))
+  
+  // Helper function to get Firestore employees for a specific branch
+  // Includes both employees with branchId set AND manually assigned employees
+  const getFirestoreEmployeesForBranch = (branchId: string | number) => {
+    const branch = fireBranches.find((b) => String(b.id) === String(branchId))
+    const branchName = branch?.branchName
+
+    // Get employees with branchId matching (from Firestore)
+    const firestoreMatches = fireEmployees.filter((emp: any) => String(emp.branchId) === String(branchId))
+
+    // Get manually assigned employees for this branch
+    const manuallyAssigned = fireEmployees.filter((emp: any) => {
+      const assignedBranchName = manualAssignments[String(emp.id)]
+      return assignedBranchName === branchName
+    })
+
+    // Combine and deduplicate by employee ID
+    const combined = [...firestoreMatches]
+    for (const emp of manuallyAssigned) {
+      if (!combined.find((e) => String(e.id) === String(emp.id))) {
+        combined.push(emp)
+      }
+    }
+
+    return combined
+  }
+  
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split("T")[0])
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [scheduleDate, setScheduleDate] = useState("")
   const [scheduleTime, setScheduleTime] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
+  const [selectedBranchForDisplay, setSelectedBranchForDisplay] = useState<string | null>(null)
+  const [todayLatestSchedule, setTodayLatestSchedule] = useState<any>(null)
+  const [appliedRotation, setAppliedRotation] = useState<any[]>([])
 
   const [showRotationPreview, setShowRotationPreview] = useState(false)
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false)
   const [lastAssignmentSnapshot, setLastAssignmentSnapshot] = useState<Array<{ crewId: number; prevBranchId: number | null }>>([])
   const [undoAvailable, setUndoAvailable] = useState(false)
-  const [editingEmployee, setEditingEmployee] = useState<number | null>(null)
-  const [manualAssignments, setManualAssignments] = useState<{ [key: number]: string }>({})
+  const [editingEmployee, setEditingEmployee] = useState<number | string | null>(null)
+  const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
+  const [pendingAssignments, setPendingAssignments] = useState<Record<string, string>>({})
+  const [debugStatus, setDebugStatus] = useState<string | null>(null)
 
   const generateRotation = (opts?: { avoidSameBranch?: boolean }) => {
-    // Build a lightweight employee view from the store's active crews and their assigned branch
-    const lightweight = crews.map((c) => {
-      const assignedBranch = getAssignedBranch ? getAssignedBranch(c.id) : null
+    // Prefer Firestore employees for preview/rotation when available; fall back to store crews
+    const sourceEmployees = (fireEmployees && fireEmployees.length > 0) ? fireEmployees : crews
+
+    // Build a lightweight employee view; try to preserve a link to the in-store crew id when possible
+    const lightweight = sourceEmployees.map((c: any, idx: number) => {
+      // find matching store crew by email or name to get assigned branch and numeric id for assignments
+      const matchedStoreCrew = crews.find((sc) => {
+        if (c.email && sc.email) return (c.email || "").toLowerCase() === (sc.email || "").toLowerCase()
+        return (sc.firstName === c.firstName && sc.surname === c.surname)
+      })
+
+      const assignedBranch = matchedStoreCrew && getAssignedBranch ? getAssignedBranch(matchedStoreCrew.id) : null
+      const idForPreview = matchedStoreCrew ? matchedStoreCrew.id : (c.id ?? `fire-${idx}`)
+
       return {
-        id: c.id,
+        id: idForPreview,
         firstName: c.firstName,
         surname: c.surname,
+        email: c.email,
         currentBranch: assignedBranch ? assignedBranch.branchName : "Unassigned",
         shift: "AM",
       }
@@ -70,11 +126,11 @@ export default function SchedulingPage() {
       if (remainder > 0) remainder--
     }
 
-    // Manual assignments count per branch
-    const manualAssignedIds = Object.keys(manualAssignments).map((k) => Number(k))
+    // Manual assignments count per branch (keys are string IDs)
+    const manualAssignedIds = Object.keys(manualAssignments).map((k) => String(k))
     const manualCount: Record<string, number> = {}
     for (const idStr of Object.keys(manualAssignments)) {
-      const bn = manualAssignments[Number(idStr)]
+      const bn = manualAssignments[idStr]
       if (!bn) continue
       manualCount[bn] = (manualCount[bn] || 0) + 1
     }
@@ -133,15 +189,15 @@ export default function SchedulingPage() {
       }
       return a
     }
-    const remaining = shuffle(lightweight.filter((e) => !manualAssignedIds.includes(e.id)))
+    const remaining = shuffle(lightweight.filter((e) => !manualAssignedIds.includes(String(e.id))))
 
     const assignedResults: Array<any> = []
 
     // First, apply manual assignments (always honor)
     for (const idStr of Object.keys(manualAssignments)) {
-      const id = Number(idStr)
-      const emp = lightweight.find((e) => e.id === id)
-      const branchName = manualAssignments[id]
+      const id = idStr
+      const emp = lightweight.find((e) => String(e.id) === String(id))
+      const branchName = manualAssignments[idStr]
       if (emp && branchName) {
         assignedResults.push({ ...emp, nextWeekBranch: branchName, nextWeekShift: emp.shift || "AM" })
         // reduce desired immediately
@@ -157,22 +213,15 @@ export default function SchedulingPage() {
       if (candidates.length > 0) {
         pick = candidates[Math.floor(Math.random() * candidates.length)]
       } else {
-        // fallback: any branch with available slots
-        const anyAvail = branchesList.find((b) => (desired[b.name] || 0) > 0)
-        pick = anyAvail || branchesList[Math.floor(Math.random() * branchesList.length)]
+        // fallback: pick any branch with remaining slots
+        const fallback = branchesList.find((b) => (desired[b.name] || 0) > 0)
+        pick = fallback || branchesList[Math.floor(Math.random() * branchesList.length)]
       }
 
       assignedResults.push({ ...emp, nextWeekBranch: pick.name, nextWeekShift: emp.shift || "AM" })
-      if (typeof desired[pick.name] === "number") desired[pick.name] = Math.max(0, desired[pick.name] - 1)
-    }
 
-    // Final pass: if any branch still has desired>0 (unlikely), fill round-robin
-    let idx = 0
-    while (Object.values(desired).some((v) => v > 0)) {
-      const availBranch = branchesList[idx % branchesList.length].name
-      const emp = assignedResults.find((e) => e.nextWeekBranch === availBranch) === undefined ? null : null
-      // nothing to do here in most cases; break to avoid infinite loop
-      break
+      // reduce desired count for the picked branch
+      if (typeof desired[pick.name] === "number") desired[pick.name] = Math.max(0, desired[pick.name] - 1)
     }
 
     return assignedResults
@@ -189,34 +238,152 @@ export default function SchedulingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crews.length, branchesList.length])
 
+  // Fetch Firestore branches and employees for scheduling persistence and UI
+  useEffect(() => {
+    const fetchFireData = async () => {
+      try {
+        const [b, e] = await Promise.all([getBranchesFromFirestore(), getEmployeesFromFirestore()])
+        setFireBranches(b)
+        setFireEmployees(e)
+        console.log("Firestore branches/employees loaded:", b.length, e.length)
+      } catch (err) {
+        console.error("Error loading Firestore scheduling data:", err)
+      }
+    }
+
+    fetchFireData()
+  }, [])
+
+  // Fetch today's latest schedule on component mount and when schedules are saved
+  const fetchTodayLatestSchedule = async () => {
+    try {
+      const today = new Date().toISOString().split("T")[0]
+      const schedulesForToday = await getSchedulesForDateFromFirestore(today)
+      
+      if (schedulesForToday && schedulesForToday.length > 0) {
+        // Sort by createdAt and get the latest one
+        const latestSchedule = schedulesForToday.sort((a: any, b: any) => {
+          const dateA = new Date(a.createdAt || 0).getTime()
+          const dateB = new Date(b.createdAt || 0).getTime()
+          return dateB - dateA
+        })[0]
+        
+        setTodayLatestSchedule(latestSchedule)
+        console.log("Today's latest schedule:", latestSchedule)
+      } else {
+        setTodayLatestSchedule(null)
+      }
+    } catch (err) {
+      console.error("Error fetching today's schedule:", err)
+    }
+  }
+
+  useEffect(() => {
+    fetchTodayLatestSchedule()
+  }, [])
+
   // Wrapped regenerate so we can show feedback and ensure UI updates
   const handleRegenerate = async () => {
     // Open confirmation modal instead of executing immediately
     setShowRegenerateConfirm(true)
   }
 
-  const confirmRegenerate = () => {
+  const confirmRegenerate = async () => {
     try {
+      console.log("[Regenerate] Starting regeneration process...")
       // Snapshot current assignments (crew -> branchId|null)
       const snapshot = crews.map((c) => {
         const assigned = getAssignedBranch ? getAssignedBranch(c.id) : null
         return { crewId: c.id, prevBranchId: assigned ? assigned.id : null }
       })
       setLastAssignmentSnapshot(snapshot)
+      console.log("[Regenerate] Snapshot created:", snapshot.length, "crews")
 
       // Generate rotation and apply
       const next = generateRotation({ avoidSameBranch: true })
+      console.log("[Regenerate] Rotation generated:", next?.length || 0, "employees")
       if (!next || next.length === 0) {
         showNotification("info", "Rotation Generated", "No assignments generated. Ensure branches and crews exist.")
         setShowRegenerateConfirm(false)
         return
       }
 
+      // Store the generated rotation to display in Current Schedules card
+      setAppliedRotation(next)
+
+      // Get today's ISO date for schedule persistence
+      const todayISO = new Date().toISOString().split("T")[0]
+
+      // Build assignments for the regenerated rotation
+      const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+
       for (const emp of next) {
-        const targetBranch = branches.find((b: any) => b.branchName === emp.nextWeekBranch)
+        // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
+        const targetBranch = fireBranches.find((b: any) => b.branchName === emp.nextWeekBranch || b.name === emp.nextWeekBranch)
+          || branches.find((b: any) => b.branchName === emp.nextWeekBranch)
         if (targetBranch) {
-          assignCrewToBranch(emp.id, targetBranch.id)
+          // update in-memory store assignment (keeps other app logic working)
+          try {
+            assignCrewToBranch(emp.id, targetBranch.id)
+            console.log("[Regenerate] Assigned crew", emp.id, "to branch", targetBranch.id)
+          } catch (e) {
+            console.warn("[Regenerate] assignCrewToBranch failed for", emp.id, targetBranch.id, e)
+          }
+
+          // Add to regenerated assignments
+          const fireBranch = fireBranches.find((fb: any) => fb.branchName === emp.nextWeekBranch || fb.name === emp.nextWeekBranch)
+
+          // try to match crew by email (prefer), then by name
+          let fireCrew = null
+          if (emp.email) {
+            fireCrew = fireEmployees.find((fe: any) => (fe.email || "").toLowerCase() === (emp.email || "").toLowerCase())
+          }
+          if (!fireCrew) {
+            fireCrew = fireEmployees.find((fe: any) => ((fe.firstName || "") === emp.firstName && (fe.surname || "") === emp.surname))
+          }
+
+          const employeeId = fireCrew ? String(fireCrew.id) : String(emp.id)
+          const branchId = fireBranch ? String(fireBranch.id) : String(targetBranch.id)
+          const branchName = fireBranch ? (fireBranch.branchName || fireBranch.name) : (targetBranch.branchName || targetBranch.name)
+          const employeeName = `${emp.firstName} ${emp.surname}`
+
+          regeneratedAssignments.push({
+            employeeId,
+            employeeName,
+            branchId,
+            branchName,
+            shift: emp.shift || "AM",
+          })
         }
+      }
+
+      // Save as a single schedule document for today with all branches and employees
+      if (regeneratedAssignments.length > 0) {
+        try {
+          const startTime = "07:00" // Default AM time for regenerated rotations
+          console.log("[Regenerate] Saving schedule to Firestore. Date:", todayISO, "Assignments:", regeneratedAssignments.length)
+          const savedId = await addScheduleToFirestore({
+            date: todayISO,
+            time: startTime,
+            assignments: regeneratedAssignments.map((a) => ({
+              employeeId: a.employeeId,
+              employeeName: a.employeeName,
+              branchId: a.branchId,
+              branchName: a.branchName,
+              isPresent: true,
+              shift: a.shift,
+            })),
+          })
+          console.log("[Regenerate] Schedule saved successfully. ID:", savedId)
+          const branchNames = [...new Set(regeneratedAssignments.map(a => a.branchName))].join(", ")
+          showNotification("success", "Schedule Saved", `Regenerated schedule saved for branches: ${branchNames}`)
+        } catch (err) {
+          console.error("[Regenerate] Error saving schedule to Firestore:", err)
+          showNotification("error", "Save Error", "Failed to save regenerated schedule to Firestore")
+          throw err
+        }
+      } else {
+        console.warn("[Regenerate] No assignments to save")
       }
 
       setShowRegenerateConfirm(false)
@@ -229,6 +396,7 @@ export default function SchedulingPage() {
         setLastAssignmentSnapshot([])
       }, 10000)
     } catch (err: any) {
+      console.error("[Regenerate] Fatal error:", err)
       showNotification("error", "Rotation Error", err?.message || String(err))
       setShowRegenerateConfirm(false)
     }
@@ -254,14 +422,66 @@ export default function SchedulingPage() {
 
   // Note: explicit preview generation button was removed from the UI per user request.
 
-  const handleManualAssignment = (employeeId: number, branchName: string) => {
-    setManualAssignments((prev) => ({
+  const handleManualAssignment = (employeeId: string | number, branchName: string) => {
+    const key = String(employeeId)
+    // Save to pending assignments first; user must confirm to commit
+    setPendingAssignments((prev) => ({
       ...prev,
-      [employeeId]: branchName,
+      [key]: branchName,
     }))
     setRotatedEmployees((prev) =>
-      prev.map((emp) => (emp.id === employeeId ? { ...emp, nextWeekBranch: branchName } : emp)),
+      prev.map((emp) => (String(emp.id) === key ? { ...emp, nextWeekBranch: branchName } : emp)),
     )
+  }
+
+  const handleAssignCrewFirestore = (crewId: string | number, branchId: string, employee: any) => {
+    if (branchId) {
+      const branch = branchId === "unassigned" ? null : fireBranches.find((b) => String(b.id) === branchId)
+
+      if (branchId === "unassigned") {
+        // Remove any local manual assignment for this employee
+        setManualAssignments((prev) => {
+          const copy = { ...prev }
+          delete copy[String(employee.id)]
+          return copy
+        })
+
+        showNotification(
+          "info",
+          "Employee Unassigned",
+          `${employee.firstName} ${employee.surname} has been unassigned.`,
+        )
+      } else {
+        // Save manual assignment locally first (offline experience)
+        const branchName = branch ? branch.branchName : null
+        if (branchName) {
+          setManualAssignments((prev) => ({ ...prev, [String(employee.id)]: branchName }))
+        } else {
+          // Fallback: use branchId string if branch name unavailable
+          setManualAssignments((prev) => ({ ...prev, [String(employee.id)]: String(branchId) }))
+        }
+
+        // Try to find matching store crew and assign via store for backward compatibility
+        const matchedStore = crews.find((sc) => {
+          if (employee.email && sc.email) return (employee.email || "").toLowerCase() === (sc.email || "").toLowerCase()
+          return sc.firstName === employee.firstName && sc.surname === employee.surname
+        })
+
+        if (matchedStore && typeof crewId === "number") {
+          assignCrewToBranch(crewId as number, Number.parseInt(branchId))
+        }
+
+        if (branch) {
+          showNotification(
+            "success",
+            "Employee Assigned",
+            `${employee.firstName} ${employee.surname} has been assigned to ${branch.branchName}.`,
+          )
+        } else {
+          showNotification("success", "Employee Assigned", "Employee has been assigned to the branch.")
+        }
+      }
+    }
   }
 
   const handleAssignCrew = (crewId: number, branchId: string) => {
@@ -297,7 +517,7 @@ export default function SchedulingPage() {
     setShowSaveModal(true)
   }
 
-  const handleSchedulePost = () => {
+  const handleSchedulePost = async () => {
     if (!scheduleDate || !scheduleTime) {
       showNotification("error", "Validation Error", "Date and time are required")
       return
@@ -305,9 +525,114 @@ export default function SchedulingPage() {
 
     console.log("Schedule posted for:", scheduleDate, scheduleTime)
 
+    try {
+      // Build complete assignments array (rotated + manual)
+      const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+
+      // Add rotated employees
+      if (rotatedEmployees && rotatedEmployees.length > 0) {
+        for (const emp of rotatedEmployees) {
+          const fireBranch = fireBranches.find((fb: any) => fb.branchName === emp.nextWeekBranch || fb.name === emp.nextWeekBranch)
+
+          // try to match crew by email first, then by name
+          let fireCrew = null
+          if ((emp as any).email) {
+            fireCrew = fireEmployees.find((fe: any) => (fe.email || "").toLowerCase() === ((emp as any).email || "").toLowerCase())
+          }
+          if (!fireCrew) {
+            fireCrew = fireEmployees.find((fe: any) => ((fe.firstName || "") === emp.firstName && (fe.surname || "") === emp.surname))
+          }
+
+          const employeeId = fireCrew ? String(fireCrew.id) : String(emp.id)
+          const branchId = fireBranch ? String(fireBranch.id) : String(emp.nextWeekBranch)
+          const branchName = fireBranch ? (fireBranch.branchName || fireBranch.name) : emp.nextWeekBranch
+          const employeeName = `${emp.firstName} ${emp.surname}`
+
+          allAssignments.push({
+            employeeId,
+            employeeName,
+            branchId,
+            branchName,
+            shift: emp.nextWeekShift || "AM",
+          })
+        }
+      }
+
+      // Add manual assignments
+      for (const [employeeIdStr, branchName] of Object.entries(manualAssignments)) {
+        const branch = fireBranches.find((b) => b.branchName === branchName)
+        const employee = fireEmployees.find((e) => String(e.id) === employeeIdStr) || crews.find((c) => String(c.id) === employeeIdStr)
+
+        if (employee && branch) {
+          // Check if this employee-branch combo is already in rotated
+          const alreadyAdded = allAssignments.some(
+            (a) => String(a.employeeId) === String(employee.id) && String(a.branchId) === String(branch.id),
+          )
+
+          if (!alreadyAdded) {
+            const employeeName = `${employee.firstName} ${employee.surname}`
+            allAssignments.push({
+              employeeId: String(employee.id),
+              employeeName,
+              branchId: String(branch.id),
+              branchName: branch.branchName || branch.name,
+              shift: "AM",
+            })
+          }
+        }
+      }
+
+      // Build branch assignments - include ALL branches, even those without employees
+      const branchAssignments = fireBranches.map((branch) => {
+        const branchEmployees = allAssignments.filter((a) => String(a.branchId) === String(branch.id))
+        return {
+          branchId: String(branch.id),
+          branchName: branch.branchName,
+          employees: branchEmployees,
+        }
+      })
+
+      // Save as a single schedule document with all assignments and branches
+      if (fireBranches.length > 0) {
+        try {
+          console.log("Saving schedule post to Firestore (allAssignments):", allAssignments.length)
+          const savedId = await addScheduleToFirestore({
+            date: scheduleDate,
+            time: scheduleTime,
+            assignments: allAssignments.map((a) => ({
+              employeeId: a.employeeId,
+              employeeName: a.employeeName,
+              branchId: a.branchId,
+              branchName: a.branchName,
+              isPresent: true, // Default to present; can be updated later
+              shift: a.shift,
+            })),
+          })
+          console.log("Schedule posted saved id:", savedId)
+          const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
+          showNotification("success", "Schedule Saved", `Schedule saved for branches: ${branchNames}`)
+        } catch (err) {
+          console.error("Error saving schedules:", err)
+          showNotification("error", "Save Error", "Failed to persist schedules to Firestore")
+          setShowSaveModal(false)
+          return
+        }
+      }
+    } catch (err) {
+      console.error("Error saving schedules:", err)
+      showNotification("error", "Save Error", "Failed to persist schedules to Firestore")
+      setShowSaveModal(false)
+      return
+    }
+
     setShowSaveModal(false)
 
     showNotification("success", "Schedule Saved", `Schedule has been saved for ${scheduleDate} at ${scheduleTime}.`)
+    
+    // Refresh today's latest schedule if it was saved for today
+    if (scheduleDate === new Date().toISOString().split("T")[0]) {
+      fetchTodayLatestSchedule()
+    }
   }
 
   const getCurrentWeekDates = () => {
@@ -365,6 +690,42 @@ export default function SchedulingPage() {
         </p>
       </div>
 
+      {process.env.NODE_ENV === "development" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Firestore Debug</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-2">
+              <div>Project: {process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "(not set)"}</div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    setDebugStatus("Calling addScheduleToFirestore...")
+                    try {
+                      const todayISO = new Date().toISOString().split("T")[0]
+                      const nowTime = new Date().toTimeString().slice(0, 5)
+                      const id = await addScheduleToFirestore({ date: todayISO, time: nowTime, assignments: [] })
+                      setDebugStatus(`Saved: ${id}`)
+                      // refresh
+                      fetchTodayLatestSchedule()
+                    } catch (e: any) {
+                      console.error("Test save error:", e)
+                      setDebugStatus(`Error: ${e?.message || String(e)}`)
+                    }
+                  }}
+                >
+                  Test Firestore Save
+                </Button>
+                <Button variant="ghost" onClick={() => setDebugStatus(null)}>Clear</Button>
+              </div>
+              {debugStatus && <div className="text-sm text-muted-foreground">{debugStatus}</div>}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs defaultValue="automated" className="w-full">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="automated">Automated Rotation</TabsTrigger>
@@ -393,7 +754,7 @@ export default function SchedulingPage() {
                 <div className="flex items-center gap-2">
                   <Users className="h-4 w-4" />
                   <span className="text-sm font-medium">Total Crew Members:</span>
-                  <Badge variant="outline">{crews.length}</Badge>
+                  <Badge variant="outline">{(fireEmployees && fireEmployees.length > 0) ? fireEmployees.length : crews.length}</Badge>
                 </div>
               </div>
 
@@ -442,6 +803,50 @@ export default function SchedulingPage() {
             </CardContent>
           </Card>
 
+          {todayLatestSchedule && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Calendar className="h-4 w-4" />
+                  Today's Latest Schedule
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  {todayLatestSchedule.time} on {todayLatestSchedule.date}
+                </p>
+              </CardHeader>
+              <CardContent className="pt-2">
+                {todayLatestSchedule.assignments && todayLatestSchedule.assignments.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {fireBranches.map((branch: any) => {
+                      const branchAssignments = todayLatestSchedule.assignments.filter(
+                        (a: any) => String(a.branchId) === String(branch.id)
+                      )
+                      
+                      return (
+                        <div key={branch.id} className="border rounded p-2">
+                          <div className="font-medium text-xs mb-1">{branch.branchName}</div>
+                          {branchAssignments.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {branchAssignments.map((assignment: any, idx: number) => (
+                                <div key={idx} className="text-xs text-muted-foreground">
+                                  • {assignment.employeeName || assignment.employeeId} <span className="text-gray-500">({assignment.shift || "AM"})</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground italic">No crew</div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-2 text-xs text-muted-foreground">No assignments</div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Dialog open={showRegenerateConfirm} onOpenChange={setShowRegenerateConfirm}>
             <DialogContent className="max-w-lg">
               <DialogHeader>
@@ -460,86 +865,90 @@ export default function SchedulingPage() {
             <CardHeader>
               <CardTitle>Current Schedules ({getCurrentWeekDates()})</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Current week's crew assignments across all restaurant branches
+                Applied rotation preview for current week
               </p>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {branchesList.map((branch) => {
-                  // Use assigned crews from the live store (persisted)
-                  const crewForBranch = getCrewsForBranch ? getCrewsForBranch(branch.id) : []
-                  const amShift = crewForBranch.filter((emp) => (emp as any).shift === "AM")
-                  const pmShift = crewForBranch.filter((emp) => (emp as any).shift === "PM")
+              {appliedRotation && appliedRotation.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {branchesList.map((branch) => {
+                    const crewForBranch = appliedRotation.filter((emp) => emp.nextWeekBranch === branch.name)
+                    const amShift = crewForBranch.filter((emp) => emp.nextWeekShift === "AM")
+                    const pmShift = crewForBranch.filter((emp) => emp.nextWeekShift === "PM")
 
-                  return (
-                    <Card key={branch.id} className="border-2">
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-lg">{branch.name}</CardTitle>
-                        <Badge variant="secondary" className="w-fit">
-                          {crewForBranch.length} crew members
-                        </Badge>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        {amShift.length > 0 && (
-                                <div>
-                                  <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground mb-2">
-                                    <Clock className="h-3 w-3" />
-                                    AM Shift (7am - 2pm)
-                                  </div>
-                                  <div className="space-y-2">
-                                    {amShift.map((employee) => (
-                                      <div key={employee.id} className="p-3 border rounded-lg bg-blue-50/50">
-                                        <div className="font-medium text-sm">
-                                          {employee.firstName} {employee.surname}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {pmShift.length > 0 && (
-                                <div>
-                                  <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground mb-2">
-                                    <Clock className="h-3 w-3" />
-                                    PM Shift (2pm - 10pm)
-                                  </div>
-                                  <div className="space-y-2">
-                                    {pmShift.map((employee) => (
-                                      <div key={employee.id} className="p-3 border rounded-lg bg-orange-50/50">
-                                        <div className="font-medium text-sm">
-                                          {employee.firstName} {employee.surname}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* If no explicit AM/PM shifts are set, fall back to listing assigned crew names */}
-                              {amShift.length === 0 && pmShift.length === 0 && crewForBranch.length > 0 && (
-                                <div className="space-y-2">
-                                  {crewForBranch.map((employee) => (
-                                    <div key={employee.id} className="p-3 border rounded-lg bg-card">
-                                      <div className="font-medium text-sm">
-                                        {employee.firstName} {employee.surname}
-                                      </div>
-                                      <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                    return (
+                      <Card key={branch.id} className="border-2">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-lg">{branch.name}</CardTitle>
+                          <Badge variant="secondary" className="w-fit">
+                            {crewForBranch.length} crew members
+                          </Badge>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {amShift.length > 0 && (
+                            <div>
+                              <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground mb-2">
+                                <Clock className="h-3 w-3" />
+                                AM Shift (7am - 2pm)
+                              </div>
+                              <div className="space-y-2">
+                                {amShift.map((employee) => (
+                                  <div key={employee.id} className="p-3 border rounded-lg bg-blue-50/50">
+                                    <div className="font-medium text-sm">
+                                      {employee.firstName} {employee.surname}
                                     </div>
-                                  ))}
-                                </div>
-                              )}
+                                    <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
-                              {crewForBranch.length === 0 && (
-                                <div className="text-center py-4 text-sm text-muted-foreground">No crew assigned</div>
-                              )}
-                      </CardContent>
-                    </Card>
-                  )
-                })}
-              </div>
+                          {pmShift.length > 0 && (
+                            <div>
+                              <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground mb-2">
+                                <Clock className="h-3 w-3" />
+                                PM Shift (2pm - 10pm)
+                              </div>
+                              <div className="space-y-2">
+                                {pmShift.map((employee) => (
+                                  <div key={employee.id} className="p-3 border rounded-lg bg-orange-50/50">
+                                    <div className="font-medium text-sm">
+                                      {employee.firstName} {employee.surname}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {amShift.length === 0 && pmShift.length === 0 && crewForBranch.length > 0 && (
+                            <div className="space-y-2">
+                              {crewForBranch.map((employee) => (
+                                <div key={employee.id} className="p-3 border rounded-lg bg-card">
+                                  <div className="font-medium text-sm">
+                                    {employee.firstName} {employee.surname}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {crewForBranch.length === 0 && (
+                            <div className="text-center py-4 text-sm text-muted-foreground">No crew assigned</div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-sm text-muted-foreground">
+                  No rotation applied yet. Generate and apply a rotation to see it here.
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -596,7 +1005,7 @@ export default function SchedulingPage() {
                                     </Button>
                                   </div>
 
-                                  {editingEmployee === employee.id && (
+                                  {String(editingEmployee) === String(employee.id) && (
                                     <div className="mt-2">
                                       <Select
                                         value={employee.nextWeekBranch}
@@ -623,12 +1032,17 @@ export default function SchedulingPage() {
                                     From: {employee.currentBranch}
                                   </div>
 
-                                  {manualAssignments[employee.id] && (
-                                    <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
-                                      <AlertTriangle className="h-3 w-3" />
-                                      Manual Override
-                                    </div>
-                                  )}
+                                      {manualAssignments[String(employee.id)] ? (
+                                        <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          Manual Override
+                                        </div>
+                                      ) : pendingAssignments[String(employee.id)] ? (
+                                        <div className="flex items-center gap-1 text-xs text-blue-600 mt-1">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          Pending
+                                        </div>
+                                      ) : null}
                                 </div>
                               ))}
                             </div>
@@ -658,7 +1072,7 @@ export default function SchedulingPage() {
                                     </Button>
                                   </div>
 
-                                  {editingEmployee === employee.id && (
+                                  {String(editingEmployee) === String(employee.id) && (
                                     <div className="mt-2">
                                       <Select
                                         value={employee.nextWeekBranch}
@@ -685,12 +1099,17 @@ export default function SchedulingPage() {
                                     From: {employee.currentBranch}
                                   </div>
 
-                                  {manualAssignments[employee.id] && (
+                                  {manualAssignments[String(employee.id)] ? (
                                     <div className="flex items-center gap-1 text-xs text-amber-600 mt-1">
                                       <AlertTriangle className="h-3 w-3" />
                                       Manual Override
                                     </div>
-                                  )}
+                                  ) : pendingAssignments[String(employee.id)] ? (
+                                    <div className="flex items-center gap-1 text-xs text-blue-600 mt-1">
+                                      <AlertTriangle className="h-3 w-3" />
+                                      Pending
+                                    </div>
+                                  ) : null}
                                 </div>
                               ))}
                             </div>
@@ -712,8 +1131,10 @@ export default function SchedulingPage() {
                 </Button>
                 <Button
                   disabled={branchesList.length === 0 || crews.length === 0}
-                  onClick={() => {
+                  onClick={async () => {
+                    console.log("[Apply Rotation Button] Clicked - Starting handler...")
                     if (branchesList.length === 0 || crews.length === 0) {
+                      console.log("[Apply Rotation Button] Validation failed: branches or crews missing")
                       showNotification(
                         "error",
                         "Cannot Apply Rotation",
@@ -725,45 +1146,81 @@ export default function SchedulingPage() {
                     }
 
                     if (!rotatedEmployees || rotatedEmployees.length === 0) {
+                      console.log("[Apply Rotation Button] No rotated employees available")
                       showNotification("info", "No Preview", "No rotation preview available. Click Regenerate to create a preview first.")
                       return
                     }
 
-                    // Compute next Monday ISO date for schedule entries
-                    const today = new Date()
-                    const currentDay = today.getDay()
-                    const nextMonday = new Date(today)
-                    nextMonday.setDate(today.getDate() - currentDay + 8)
-                    const nextMondayISO = nextMonday.toISOString().split("T")[0]
+                    console.log("[Apply Rotation Button] Validation passed. rotatedEmployees:", rotatedEmployees.length)
+                    // Compute today's ISO date for schedule entries
+                    const todayISO = new Date().toISOString().split("T")[0]
 
-                    // Persist rotated assignments as schedule records (do NOT overwrite current branch assignments)
+                    // Build assignments for today's schedule
+                    const applyRotationAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+
                     for (const emp of rotatedEmployees) {
-                      const targetBranch = branches.find((b: any) => b.branchName === emp.nextWeekBranch)
+                      // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
+                      const targetBranch = fireBranches.find((b: any) => b.branchName === emp.nextWeekBranch || b.name === emp.nextWeekBranch)
+                        || branches.find((b: any) => b.branchName === emp.nextWeekBranch)
                       if (targetBranch) {
-                        // avoid duplicate schedules for the same crew on the same date
-                        const existing = getSchedulesForDate ? getSchedulesForDate(nextMondayISO) : []
-                        const already = existing && existing.find((s: any) => s.crewId === emp.id)
-                        if (!already) {
-                          // determine times from shift
-                          const shift = emp.nextWeekShift || "AM"
-                          const startTime = shift === "AM" ? "07:00" : "14:00"
-                          const endTime = shift === "AM" ? "14:00" : "22:00"
-                          addSchedule({ crewId: emp.id, branchId: targetBranch.id, date: nextMondayISO, startTime, endTime })
-                        }
+                        const employeeName = `${emp.firstName} ${emp.surname}`
+                        const branchName = targetBranch.branchName || targetBranch.name
+                        applyRotationAssignments.push({
+                          employeeId: String(emp.id),
+                          employeeName,
+                          branchId: String(targetBranch.id),
+                          branchName,
+                          shift: emp.nextWeekShift || "AM",
+                        })
+                        console.log("[Apply Rotation Button] Added assignment:", employeeName, "->", branchName)
 
                         // Also update current assignment so the applied preview becomes the current rotation
-                        // This ensures Current Schedules reflect the applied preview immediately and
-                        // subsequent Preview generation will be based on the updated current schedule.
                         assignCrewToBranch(emp.id, targetBranch.id)
+                      } else {
+                        console.warn("[Apply Rotation Button] No matching branch found for:", emp.nextWeekBranch)
+                      }
+                    }
+                    console.log("[Apply Rotation Button] Built assignments:", applyRotationAssignments.length)
+
+                    // Save as a single schedule document for today with all branches and employees
+                    if (applyRotationAssignments.length > 0) {
+                      const startTime = "07:00" // Default AM time for applied rotations
+                      console.log("[Apply Rotation] Saving schedule to Firestore (assignments):", applyRotationAssignments.length)
+                      console.log("[Apply Rotation] Date:", todayISO, "Time:", startTime)
+                      try {
+                        const savedId = await addScheduleToFirestore({
+                          date: todayISO,
+                          time: startTime,
+                          assignments: applyRotationAssignments.map((a) => ({
+                            employeeId: a.employeeId,
+                            employeeName: a.employeeName,
+                            branchId: a.branchId,
+                            branchName: a.branchName,
+                            isPresent: true,
+                            shift: a.shift,
+                          })),
+                        })
+                        console.log("[Apply Rotation] Schedule saved successfully. ID:", savedId)
+                        const branchNames = [...new Set(applyRotationAssignments.map(a => a.branchName))].join(", ")
+                        showNotification("success", "Schedule Saved", `Applied rotation saved for branches: ${branchNames}`)
+                      } catch (err) {
+                        console.error("[Apply Rotation] Failed to add schedule to Firestore:", err)
+                        showNotification("error", "Save Error", "Failed to save rotation to Firestore")
                       }
                     }
 
                     // Clear preview/manual overrides after applying so Preview is reset
                     setRotatedEmployees([])
                     setManualAssignments({})
+                    
+                    // Store the applied rotation to display in Current Schedules card
+                    setAppliedRotation(rotatedEmployees)
 
                     showNotification("success", "Rotation Applied", "Next week's rotation has been scheduled and set as the current rotation.")
                     setShowRotationPreview(false)
+                    
+                    // Refresh today's latest schedule
+                    fetchTodayLatestSchedule()
                   }}
                 >
                   Apply Rotation
@@ -787,54 +1244,105 @@ export default function SchedulingPage() {
           <div className="flex flex-col lg:flex-row gap-8">
             <Card className="lg:w-1/3">
               <CardHeader>
-                <CardTitle>Available Restaurant Crew</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Available Restaurant Crew</CardTitle>
+                </div>
+                <div className="flex items-center gap-2 mt-3">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setManualAssignments((prev) => ({ ...prev, ...pendingAssignments }))
+                      setPendingAssignments({})
+                      showNotification("success", "Selections Saved", "Pending selections have been confirmed and will show on branch cards.")
+                    }}
+                  >
+                    Confirm Selections
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
-                {crews.filter((crew) => {
-                  const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
-                  return fullName.includes(searchQuery.toLowerCase())
-                }).length > 0 ? (
-                  <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
-                    {crews
-                      .filter((crew) => {
-                        const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
-                        return fullName.includes(searchQuery.toLowerCase())
-                      })
-                      .map((crew) => (
-                        <div key={crew.id} className="p-4 rounded-lg border bg-card">
-                          <div className="mb-2">
-                            <div className="font-medium">
-                              {crew.firstName} {crew.surname}
+                {(() => {
+                  const displayCrews = (fireEmployees && fireEmployees.length > 0) ? fireEmployees : crews
+                  const filtered = displayCrews.filter((crew: any) => {
+                    const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
+                    return fullName.includes(searchQuery.toLowerCase())
+                  })
+
+                  return filtered.length > 0 ? (
+                    <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                      {filtered.map((crew: any) => {
+                        // try to find matching store crew for assignment actions (for backward compatibility with assignCrewToBranch)
+                        const matchedStore = crews.find((sc) => {
+                          if (crew.email && sc.email) return (crew.email || "").toLowerCase() === (sc.email || "").toLowerCase()
+                          return sc.firstName === crew.firstName && sc.surname === crew.surname
+                        })
+
+                        return (
+                          <div key={crew.id} className="p-4 rounded-lg border bg-card">
+                            <div className="mb-2">
+                              <div className="font-medium">
+                                {crew.firstName} {crew.surname}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Select onValueChange={(value) => {
+                                // Store as pending assignment (branch name) until user confirms
+                                const branchName = value === "unassigned" ? "Unassigned" : (fireBranches.find((b) => String(b.id) === value)?.branchName || value)
+                                handleManualAssignment(crew.id, branchName)
+                              }}>
+                                <SelectTrigger className="w-full">
+                                  <SelectValue placeholder="Select Branch" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                                  {fireBranches.map((branch) => (
+                                    <SelectItem key={branch.id} value={branch.id.toString()}>
+                                      {branch.branchName}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Select onValueChange={(value) => handleAssignCrew(crew.id, value)}>
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select Branch" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="unassigned">Unassigned</SelectItem>
-                                {branches.map((branch) => (
-                                  <SelectItem key={branch.id} value={branch.id.toString()}>
-                                    {branch.branchName}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    {searchQuery ? "No crew members match your search" : "No active crew members available"}
-                  </div>
-                )}
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-muted-foreground">
+                      {searchQuery ? "No crew members match your search" : "No active crew members available"}
+                    </div>
+                  )
+                })()}
               </CardContent>
             </Card>
 
             <div className="lg:w-2/3 space-y-4">
               <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="w-full">
+                  <Label className="text-sm font-medium mb-2 block">View Scheduled Employees</Label>
+                  <Select value={selectedBranchForDisplay || "all"} onValueChange={(value) => {
+                    setSelectedBranchForDisplay(value === "all" ? null : value)
+                    // Scroll the grid into view when a branch is selected - with delay for DOM update
+                    setTimeout(() => {
+                      const gridElement = document.querySelector('[data-branch-grid]')
+                      if (gridElement) {
+                        gridElement.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
+                    }, 100)
+                  }}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a branch to view scheduled employees" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Branches</SelectItem>
+                      {fireBranches.map((branch) => (
+                        <SelectItem key={branch.id} value={branch.id.toString()}>
+                          {branch.branchName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <Input
                   type="date"
                   value={selectedDate}
@@ -844,38 +1352,87 @@ export default function SchedulingPage() {
                 <Button onClick={handleSaveSchedule}>Save Schedule</Button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {branches.length > 0 ? (
-                  branches.map((branch) => {
-                    const assignedCrews = getCrewsForBranch(branch.id)
-
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-branch-grid>
+                {(() => {
+                  if (!selectedBranchForDisplay) {
+                    // Show all branches with their assigned employees
+                    return fireBranches.length > 0 ? (
+                      fireBranches.map((branch) => {
+                        // Prefer Firestore employees for the branch
+                        const assignedCrews = fireEmployees.length > 0
+                          ? getFirestoreEmployeesForBranch(branch.id)
+                          : getCrewsForBranch(branch.id)
+                        return (
+                          <Card key={branch.id}>
+                            <CardHeader className="pb-2">
+                              <CardTitle className="text-lg">{branch.branchName}</CardTitle>
+                              <p className="text-sm text-muted-foreground">{branch.address}</p>
+                            </CardHeader>
+                            <CardContent>
+                              {assignedCrews.length > 0 ? (
+                                <div className="space-y-2">
+                                  {assignedCrews.map((crew) => (
+                                    <div key={crew.id} className="p-2 rounded-md text-sm bg-muted">
+                                      {crew.firstName} {crew.surname}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-center py-4 text-sm text-muted-foreground">No employees assigned</div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        )
+                      })
+                    ) : (
+                      <div className="col-span-2 text-center py-8 text-muted-foreground">
+                        No branches available. Add branches in the Branch Management section.
+                      </div>
+                    )
+                  } else {
+                    // Show specific branch with its employees
+                    const selectedBranch = fireBranches.find((b) => String(b.id) === selectedBranchForDisplay)
+                    if (!selectedBranch) return <div className="text-center py-8 text-muted-foreground">Branch not found</div>
+                    
+                    // Prefer Firestore employees for the selected branch
+                    const assignedCrews = fireEmployees.length > 0 
+                      ? getFirestoreEmployeesForBranch(selectedBranch.id)
+                      : getCrewsForBranch(selectedBranch.id)
+                    
                     return (
-                      <Card key={branch.id}>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="text-lg">{branch.branchName}</CardTitle>
-                          <p className="text-sm text-muted-foreground">{branch.address}</p>
+                      <Card className="col-span-1 md:col-span-2 border-2 border-blue-500 bg-blue-50 dark:bg-blue-950 animate-in fade-in slide-in-from-top-2 duration-300">
+                        <CardHeader>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <CardTitle>{selectedBranch.branchName}</CardTitle>
+                              <p className="text-sm text-muted-foreground">{selectedBranch.address}</p>
+                              <p className="text-sm font-medium mt-2">{assignedCrews.length} employees scheduled</p>
+                            </div>
+                            <div className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full">Selected</div>
+                          </div>
                         </CardHeader>
                         <CardContent>
                           {assignedCrews.length > 0 ? (
-                            <div className="space-y-2">
+                            <div className="space-y-3">
                               {assignedCrews.map((crew) => (
-                                <div key={crew.id} className="p-2 rounded-md text-sm bg-muted">
-                                  {crew.firstName} {crew.surname}
+                                <div key={crew.id} className="p-3 rounded-lg border bg-card">
+                                  <div className="flex justify-between items-start">
+                                    <div>
+                                      <div className="font-medium">{crew.firstName} {crew.surname}</div>
+                                      <div className="text-xs text-muted-foreground mt-1">{crew.type || "Employee"}</div>
+                                    </div>
+                                  </div>
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <div className="text-center py-4 text-sm text-muted-foreground">No crews assigned</div>
+                            <div className="text-center py-8 text-muted-foreground">No employees scheduled for this branch</div>
                           )}
                         </CardContent>
                       </Card>
                     )
-                  })
-                ) : (
-                  <div className="col-span-2 text-center py-8 text-muted-foreground">
-                    No branches available. Add branches in the Branch Management section.
-                  </div>
-                )}
+                  }
+                })()}
               </div>
             </div>
           </div>

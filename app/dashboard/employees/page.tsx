@@ -10,9 +10,17 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
-import { useCrewStore } from "@/lib/cleanStore"
 import { Archive, RotateCcw, Search, Trash2 } from "lucide-react"
 import { ErrorBoundary } from "@/components/error-boundary"
+import {
+  getActiveEmployees,
+  getArchivedEmployees,
+  updateEmployee,
+  archiveEmployee,
+  restoreEmployee,
+  deleteEmployee,
+  type Employee,
+} from "@/lib/firestore-employee-service"
 
 export default function EmployeesPage() {
   // Wrap the entire component in an error boundary
@@ -26,36 +34,40 @@ export default function EmployeesPage() {
 function EmployeesContent() {
   const { showNotification } = useNotification()
   const { openDialog, closeDialog, openConfirmDialog } = useDialog()
-  const {
-    updateCrew,
-    archiveCrew,
-    restoreCrew,
-    getAssignedBranch,
-    getActiveCrews,
-    getArchivedCrews,
-    crews,
-    deleteCrew,
-    error,
-    clearError,
-  } = useCrewStore()
-
   const [activeTab, setActiveTab] = useState<"active" | "archived">("active")
   const [searchQuery, setSearchQuery] = useState("")
   const [editingEmployee, setEditingEmployee] = useState<any>(null)
   const [mode, setMode] = useState<"full-time" | "part-time">("full-time")
   const [isProcessing, setIsProcessing] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [activeCrews, setActiveCrews] = useState<Employee[]>([])
+  const [archivedCrews, setArchivedCrews] = useState<Employee[]>([])
 
-  // Show error notifications from the store
+  // Fetch employees from Firestore
   useEffect(() => {
-    if (error) {
-      showNotification("error", "Error", error)
-      clearError()
+    const fetchEmployees = async () => {
+      try {
+        setIsLoading(true)
+        console.log("Fetching employees from Firestore...")
+        const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+        console.log("Active employees:", active)
+        console.log("Archived employees:", archived)
+        setActiveCrews(active)
+        setArchivedCrews(archived)
+        
+        if (active.length === 0 && archived.length === 0) {
+          showNotification("info", "No Employees", "No employees found. Make sure there are users with role 'employee' in the Firebase 'users' collection.")
+        }
+      } catch (error) {
+        console.error("Error fetching employees:", error)
+        showNotification("error", "Error", `Failed to load employees: ${error instanceof Error ? error.message : String(error)}`)
+      } finally {
+        setIsLoading(false)
+      }
     }
-  }, [error, showNotification, clearError])
 
-  // Get crews with error handling
-  const activeCrews = getActiveCrews() || []
-  const archivedCrews = getArchivedCrews() || []
+    fetchEmployees()
+  }, [showNotification])
 
   // Filter crews based on search query
   const filteredActiveCrews = activeCrews.filter((crew) => {
@@ -69,12 +81,12 @@ function EmployeesContent() {
   })
 
   const handleStartEdit = useCallback(
-    (employee: any) => {
+    (employee: Employee) => {
       if (isProcessing) return
 
       try {
         setEditingEmployee({ ...employee })
-        setMode(employee.type)
+        setMode((employee.type || "full-time") as "full-time" | "part-time")
 
         openDialog(
           <div className="space-y-6 py-4">
@@ -170,13 +182,18 @@ function EmployeesContent() {
                 Cancel
               </Button>
               <Button
-                onClick={() => {
+                onClick={async () => {
                   if (editingEmployee) {
                     setIsProcessing(true)
                     try {
                       const updatedEmployee = { ...editingEmployee, type: mode }
-                      updateCrew(updatedEmployee)
+                      await updateEmployee(editingEmployee.id, updatedEmployee)
                       closeDialog()
+
+                      // Refresh the employee list
+                      const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+                      setActiveCrews(active)
+                      setArchivedCrews(archived)
 
                       const employeeName = `${updatedEmployee.firstName} ${updatedEmployee.surname}`
                       showNotification(
@@ -205,11 +222,11 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to open edit dialog")
       }
     },
-    [openDialog, closeDialog, showNotification, updateCrew, mode, editingEmployee, isProcessing],
+    [openDialog, closeDialog, showNotification, mode, editingEmployee, isProcessing],
   )
 
   const handleArchiveClick = useCallback(
-    (employeeId: number) => {
+    (employeeId: string) => {
       if (isProcessing) return
 
       try {
@@ -228,10 +245,16 @@ function EmployeesContent() {
             "This will archive the employee record. The employee will no longer appear in active lists, but their data will be preserved and can be restored later if needed.",
           confirmLabel: "Archive",
           confirmVariant: "bg-amber-600 hover:bg-amber-700",
-          onConfirm: () => {
+          onConfirm: async () => {
             setIsProcessing(true)
             try {
-              archiveCrew(employeeId)
+              await archiveEmployee(employeeId)
+              
+              // Refresh the employee list
+              const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+              setActiveCrews(active)
+              setArchivedCrews(archived)
+              
               showNotification(
                 "info",
                 "Employee Archived",
@@ -250,11 +273,11 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to process archive request")
       }
     },
-    [openConfirmDialog, archiveCrew, showNotification, activeCrews, isProcessing],
+    [openConfirmDialog, showNotification, activeCrews, isProcessing],
   )
 
   const handleRestoreClick = useCallback(
-    (employeeId: number) => {
+    (employeeId: string) => {
       if (isProcessing) return
 
       try {
@@ -273,10 +296,16 @@ function EmployeesContent() {
             "This will restore the employee to active status. The employee will appear in active lists and be available for assignments.",
           confirmLabel: "Restore",
           confirmVariant: "bg-green-600 hover:bg-green-700",
-          onConfirm: () => {
+          onConfirm: async () => {
             setIsProcessing(true)
             try {
-              restoreCrew(employeeId)
+              await restoreEmployee(employeeId)
+              
+              // Refresh the employee list
+              const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+              setActiveCrews(active)
+              setArchivedCrews(archived)
+              
               showNotification("success", "Employee Restored", `${employeeName} has been restored to active status.`)
             } catch (error) {
               console.error("Error restoring employee:", error)
@@ -291,16 +320,16 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to process restore request")
       }
     },
-    [openConfirmDialog, restoreCrew, showNotification, archivedCrews, isProcessing],
+    [openConfirmDialog, showNotification, archivedCrews, isProcessing],
   )
 
   const handleDeleteClick = useCallback(
-    (employeeId: number) => {
+    (employeeId: string) => {
       if (isProcessing) return
 
       try {
         // Find employee details for notification
-        const employee = crews.find((c) => c.id === employeeId)
+        const employee = [...activeCrews, ...archivedCrews].find((c) => c.id === employeeId)
         if (!employee) {
           showNotification("error", "Error", "Employee not found")
           return
@@ -314,10 +343,16 @@ function EmployeesContent() {
             "This action cannot be undone. This will permanently delete the employee record from the system.",
           confirmLabel: "Delete Permanently",
           confirmVariant: "bg-red-600 hover:bg-red-700",
-          onConfirm: () => {
+          onConfirm: async () => {
             setIsProcessing(true)
             try {
-              deleteCrew(employeeId)
+              await deleteEmployee(employeeId)
+              
+              // Refresh the employee list
+              const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+              setActiveCrews(active)
+              setArchivedCrews(archived)
+              
               showNotification(
                 "info",
                 "Employee Deleted",
@@ -336,10 +371,10 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to process delete request")
       }
     },
-    [openConfirmDialog, deleteCrew, showNotification, crews, isProcessing],
+    [openConfirmDialog, showNotification, activeCrews, archivedCrews, isProcessing],
   )
 
-  const EmployeeList = ({ employees, isArchived = false }: { employees: any[]; isArchived?: boolean }) => (
+  const EmployeeList = ({ employees, isArchived = false }: { employees: Employee[]; isArchived?: boolean }) => (
     <div className="rounded-md border overflow-x-auto">
       <div className="min-w-[800px]">
         <div className="grid grid-cols-5 p-4 font-medium bg-muted/50">
@@ -356,13 +391,13 @@ function EmployeesContent() {
               <div className="font-medium">
                 {employee.firstName} {employee.surname}
               </div>
-              <div>{employee.type}</div>
+              <div>{employee.type || "Not specified"}</div>
               <div>
                 <Badge variant={employee.isPresent ? "default" : "destructive"}>
                   {employee.isPresent ? "Present" : "Absent"}
                 </Badge>
               </div>
-              <div>{getAssignedBranch(employee.id) ? getAssignedBranch(employee.id)?.branchName : "Unassigned"}</div>
+              <div>{employee.branchId ? employee.branchId : "Unassigned"}</div>
               <div className="flex gap-2">
                 {!isArchived ? (
                   <>
@@ -438,42 +473,51 @@ function EmployeesContent() {
           className="pl-10"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          disabled={isLoading}
         />
       </div>
 
-      <Tabs
-        defaultValue="active"
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(value as "active" | "archived")}
-        className="w-full"
-      >
-        <TabsList className="grid w-full grid-cols-2 mb-8">
-          <TabsTrigger value="active">Active Employees</TabsTrigger>
-          <TabsTrigger value="archived">Archived Employees</TabsTrigger>
-        </TabsList>
+      {isLoading ? (
+        <Card>
+          <CardContent className="p-8">
+            <div className="text-center text-muted-foreground">Loading employees...</div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Tabs
+          defaultValue="active"
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as "active" | "archived")}
+          className="w-full"
+        >
+          <TabsList className="grid w-full grid-cols-2 mb-8">
+            <TabsTrigger value="active">Active Employees</TabsTrigger>
+            <TabsTrigger value="archived">Archived Employees</TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="active">
-          <Card>
-            <CardHeader>
-              <CardTitle>Active Employee List</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <EmployeeList employees={filteredActiveCrews} />
-            </CardContent>
-          </Card>
-        </TabsContent>
+          <TabsContent value="active">
+            <Card>
+              <CardHeader>
+                <CardTitle>Active Employee List</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <EmployeeList employees={filteredActiveCrews} />
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-        <TabsContent value="archived">
-          <Card>
-            <CardHeader>
-              <CardTitle>Archived Employee List</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <EmployeeList employees={filteredArchivedCrews} isArchived={true} />
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="archived">
+            <Card>
+              <CardHeader>
+                <CardTitle>Archived Employee List</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <EmployeeList employees={filteredArchivedCrews} isArchived={true} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      )}
     </div>
   )
 }

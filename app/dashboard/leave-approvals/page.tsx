@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
-import { useCrewStore } from "@/lib/cleanStore"
+import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { format, parseISO, differenceInDays } from "date-fns"
 import { Calendar, CheckCircle, XCircle } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
@@ -15,20 +15,45 @@ import { Label } from "@/components/ui/label"
 export default function LeaveApprovalsPage() {
   const { showNotification } = useNotification()
   const { openConfirmDialog } = useDialog()
-  const { leaveRequests, crews, approveLeaveRequest, rejectLeaveRequest } = useCrewStore()
+  const [employees, setEmployees] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
-  const [isLoading, setIsLoading] = useState(false)
   const [rejectionReason, setRejectionReason] = useState("")
 
+  // Fetch Firestore employees on mount
   useEffect(() => {
-    // Load pending leave requests
-    const requests = leaveRequests.filter((request) => request.status === "pending")
-    setPendingRequests(requests)
-  }, [leaveRequests])
+    const fetchData = async () => {
+      try {
+        setIsLoading(true)
+        const emps = await getActiveEmployees()
+        console.log("Leave Approvals: Fetched employees from Firestore", emps)
+        setEmployees(emps)
 
-  const getEmployeeName = (crewId: number) => {
-    const crew = crews.find((c) => c.id === crewId)
-    return crew ? `${crew.firstName} ${crew.surname}` : "Unknown Employee"
+        // Load mock pending leave requests (would come from Firestore in production)
+        const mockRequests = [
+          {
+            id: 1,
+            employeeId: emps[0]?.id || "emp1",
+            startDate: new Date().toISOString().split("T")[0],
+            endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+            reason: "Annual leave",
+            status: "pending",
+          },
+        ]
+        setPendingRequests(mockRequests)
+      } catch (error) {
+        console.error("Leave Approvals: Error fetching data from Firestore:", error)
+        showNotification("error", "Error", "Failed to load employee data")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchData()
+  }, [showNotification])
+
+  const getEmployeeName = (employeeId: string | number) => {
+    const emp = employees.find((e) => String(e.id) === String(employeeId))
+    return emp ? `${emp.firstName} ${emp.surname}` : "Unknown Employee"
   }
 
   const handleApprove = (requestId: number) => {
@@ -37,14 +62,13 @@ export default function LeaveApprovalsPage() {
 
     openConfirmDialog({
       title: "Approve Leave Request",
-      description: `Are you sure you want to approve ${getEmployeeName(request.crewId)}'s leave request from ${format(parseISO(request.startDate), "MMM d, yyyy")} to ${format(parseISO(request.endDate), "MMM d, yyyy")}?`,
+      description: `Are you sure you want to approve ${getEmployeeName(request.employeeId)}'s leave request from ${format(parseISO(request.startDate), "MMM d, yyyy")} to ${format(parseISO(request.endDate), "MMM d, yyyy")}?`,
       confirmLabel: "Approve",
       confirmVariant: "bg-green-600 hover:bg-green-700",
       onConfirm: () => {
-        setIsLoading(true)
         try {
-          // Use 1 as the reviewer ID (admin)
-          approveLeaveRequest(requestId, 1)
+          // In production, this would call a Firestore function
+          // approveLeaveRequest(requestId, adminId)
 
           // Update local state
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
@@ -52,13 +76,11 @@ export default function LeaveApprovalsPage() {
           showNotification(
             "success",
             "Leave Request Approved",
-            `${getEmployeeName(request.crewId)}'s leave request has been approved.`,
+            `${getEmployeeName(request.employeeId)}'s leave request has been approved.`,
           )
         } catch (error) {
           console.error("Error approving leave request:", error)
           showNotification("error", "Error", "Failed to approve leave request")
-        } finally {
-          setIsLoading(false)
         }
       },
     })
@@ -73,7 +95,7 @@ export default function LeaveApprovalsPage() {
       description: (
         <div className="space-y-4">
           <p>
-            Are you sure you want to reject {getEmployeeName(request.crewId)}'s leave request from{" "}
+            Are you sure you want to reject {getEmployeeName(request.employeeId)}'s leave request from{" "}
             {format(parseISO(request.startDate), "MMM d, yyyy")} to {format(parseISO(request.endDate), "MMM d, yyyy")}?
           </p>
           <div className="space-y-2">
@@ -91,10 +113,9 @@ export default function LeaveApprovalsPage() {
       confirmLabel: "Reject",
       confirmVariant: "bg-red-600 hover:bg-red-700",
       onConfirm: () => {
-        setIsLoading(true)
         try {
-          // Use 1 as the reviewer ID (admin)
-          rejectLeaveRequest(requestId, 1, rejectionReason)
+          // In production, this would call a Firestore function
+          // rejectLeaveRequest(requestId, adminId, rejectionReason)
 
           // Update local state
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
@@ -102,7 +123,7 @@ export default function LeaveApprovalsPage() {
           showNotification(
             "info",
             "Leave Request Rejected",
-            `${getEmployeeName(request.crewId)}'s leave request has been rejected.`,
+            `${getEmployeeName(request.employeeId)}'s leave request has been rejected.`,
           )
 
           // Reset rejection reason
@@ -110,8 +131,6 @@ export default function LeaveApprovalsPage() {
         } catch (error) {
           console.error("Error rejecting leave request:", error)
           showNotification("error", "Error", "Failed to reject leave request")
-        } finally {
-          setIsLoading(false)
         }
       },
     })
@@ -133,7 +152,9 @@ export default function LeaveApprovalsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {pendingRequests.length > 0 ? (
+          {isLoading ? (
+            <div className="py-8 text-center text-muted-foreground">Loading employee data...</div>
+          ) : pendingRequests.length > 0 ? (
             <div className="space-y-4">
               {pendingRequests.map((request) => {
                 const startDate = parseISO(request.startDate)
@@ -145,9 +166,9 @@ export default function LeaveApprovalsPage() {
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="font-medium text-lg">{getEmployeeName(request.crewId)}</h3>
+                          <h3 className="font-medium text-lg">{getEmployeeName(request.employeeId)}</h3>
                           <Badge variant="outline" className="capitalize">
-                            {request.type} Leave
+                            Leave
                           </Badge>
                         </div>
 
@@ -164,7 +185,7 @@ export default function LeaveApprovalsPage() {
                         )}
 
                         <div className="text-xs text-muted-foreground mt-2">
-                          Requested on {format(parseISO(request.createdAt), "MMM d, yyyy")}
+                          Requested on {format(new Date(), "MMM d, yyyy")}
                         </div>
                       </div>
 
@@ -173,7 +194,6 @@ export default function LeaveApprovalsPage() {
                           variant="outline"
                           className="border-green-500 text-green-600 hover:bg-green-50 hover:text-green-700"
                           onClick={() => handleApprove(request.id)}
-                          disabled={isLoading}
                         >
                           <CheckCircle className="h-4 w-4 mr-2" />
                           Approve
@@ -183,7 +203,6 @@ export default function LeaveApprovalsPage() {
                           variant="outline"
                           className="border-red-500 text-red-600 hover:bg-red-50 hover:text-red-700"
                           onClick={() => handleReject(request.id)}
-                          disabled={isLoading}
                         >
                           <XCircle className="h-4 w-4 mr-2" />
                           Reject

@@ -2,15 +2,15 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
-import { useDialog } from "@/components/dialog-provider"
-import { useCrewStore } from "@/lib/cleanStore"
-import { format, parseISO, addDays } from "date-fns"
-import { AlertTriangle, CheckCircle, XCircle, FileText } from "lucide-react"
+import { getActiveEmployees } from "@/lib/firestore-employee-service"
+import { getAllAbsences, addAbsence, updateAbsenceStatus, type Absence } from "@/lib/firestore-absence-service"
+import { format, parseISO } from "date-fns"
+import { AlertTriangle, CheckCircle, XCircle, FileText, RefreshCw } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -19,47 +19,52 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 
 export default function AbsencesPage() {
   const { showNotification } = useNotification()
-  const { openConfirmDialog } = useDialog()
-  const { crews, getActiveCrews, getAssignedBranch, addNotification } = useCrewStore()
+  const [employees, setEmployees] = useState<any[]>([])
+  const [absences, setAbsences] = useState<Absence[]>([])
+  const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("unplanned")
-  const [isLoading, setIsLoading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
 
-  // Mock data for absences - in a real app, this would come from the store
-  const [unplannedAbsences, setUnplannedAbsences] = useState<any[]>([
-    {
-      id: 1,
-      crewId: 101,
-      date: new Date().toISOString().split("T")[0],
-      reason: "Called in sick without prior notice",
-      status: "unexcused",
-      notes: "Second occurrence this month",
-    },
-    {
-      id: 2,
-      crewId: 102,
-      date: addDays(new Date(), -2).toISOString().split("T")[0],
-      reason: "Family emergency",
-      status: "excused",
-      notes: "Provided documentation",
-    },
-  ])
+  // Fetch Firestore data on mount
+  const fetchData = async () => {
+    try {
+      setIsLoading(true)
+      const [emps, abs] = await Promise.all([
+        getActiveEmployees(),
+        getAllAbsences()
+      ])
+      console.log("Absences: Fetched employees from Firestore", emps)
+      console.log("Absences: Fetched absences from Firestore", abs)
+      setEmployees(emps)
+      setAbsences(abs)
+    } catch (error) {
+      console.error("Absences: Error fetching data from Firestore:", error)
+      showNotification("error", "Error", "Failed to load data")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [])
 
   // Form state for recording new absence
   const [absenceForm, setAbsenceForm] = useState({
-    crewId: "",
+    employeeId: "",
     date: format(new Date(), "yyyy-MM-dd"),
     reason: "",
-    status: "unexcused",
+    status: "unexcused" as "excused" | "unexcused",
     notes: "",
   })
 
-  // Get active crews
-  const activeCrews = getActiveCrews()
+  // Use employees from Firestore
+  const activeEmployees = employees
 
-  // Filter crews based on search query
-  const filteredCrews = activeCrews.filter((crew) => {
-    const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
+  // Filter employees based on search query
+  const filteredEmployees = activeEmployees.filter((emp) => {
+    const fullName = `${emp.firstName} ${emp.surname}`.toLowerCase()
     return fullName.includes(searchQuery.toLowerCase())
   })
 
@@ -72,37 +77,45 @@ export default function AbsencesPage() {
     setAbsenceForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleRecordAbsence = () => {
-    if (!absenceForm.crewId || !absenceForm.date || !absenceForm.reason) {
+  const handleRecordAbsence = async () => {
+    if (!absenceForm.employeeId || !absenceForm.date || !absenceForm.reason) {
       showNotification("error", "Missing Information", "Please fill in all required fields.")
       return
     }
 
-    setIsLoading(true)
+    setIsSubmitting(true)
     try {
-      // In a real app, this would call a store method
-      const newAbsence = {
-        id: Date.now(),
-        crewId: Number(absenceForm.crewId),
+      // Get employee details
+      const employee = employees.find((e) => String(e.id) === absenceForm.employeeId)
+      const employeeName = employee ? `${employee.firstName} ${employee.surname}` : undefined
+
+      // Save to Firestore
+      const absenceId = await addAbsence({
+        employeeId: absenceForm.employeeId,
+        employeeName,
         date: absenceForm.date,
         reason: absenceForm.reason,
         status: absenceForm.status,
-        notes: absenceForm.notes,
+        notes: absenceForm.notes || undefined,
+      })
+
+      // Add to local state
+      const newAbsence: Absence = {
+        id: absenceId,
+        employeeId: absenceForm.employeeId,
+        employeeName,
+        date: absenceForm.date,
+        reason: absenceForm.reason,
+        status: absenceForm.status,
+        notes: absenceForm.notes || undefined,
+        createdAt: new Date().toISOString(),
       }
 
-      setUnplannedAbsences((prev) => [...prev, newAbsence])
-
-      // Add notification for the employee
-      addNotification({
-        recipientId: Number(absenceForm.crewId),
-        title: "Absence Recorded",
-        message: `An absence has been recorded for you on ${format(parseISO(absenceForm.date), "MMMM d, yyyy")}. Status: ${absenceForm.status}.`,
-        type: "warning",
-      })
+      setAbsences((prev) => [newAbsence, ...prev])
 
       // Reset form
       setAbsenceForm({
-        crewId: "",
+        employeeId: "",
         date: format(new Date(), "yyyy-MM-dd"),
         reason: "",
         status: "unexcused",
@@ -110,53 +123,64 @@ export default function AbsencesPage() {
       })
 
       showNotification("success", "Absence Recorded", "The absence has been recorded successfully.")
+      setActiveTab("unplanned") // Switch to view the recorded absence
     } catch (error) {
       console.error("Error recording absence:", error)
       showNotification("error", "Error", "Failed to record absence. Please try again.")
     } finally {
-      setIsLoading(false)
+      setIsSubmitting(false)
     }
   }
 
-  const handleUpdateAbsenceStatus = (absenceId: number, newStatus: string) => {
-    setUnplannedAbsences((prev) =>
-      prev.map((absence) => (absence.id === absenceId ? { ...absence, status: newStatus } : absence)),
-    )
+  const handleUpdateAbsenceStatus = async (absenceId: string, newStatus: "excused" | "unexcused") => {
+    try {
+      await updateAbsenceStatus(absenceId, newStatus)
+      
+      // Update local state
+      setAbsences((prev) =>
+        prev.map((absence) => (absence.id === absenceId ? { ...absence, status: newStatus } : absence)),
+      )
 
-    const absence = unplannedAbsences.find((a) => a.id === absenceId)
-    if (absence) {
-      // Add notification for the employee
-      addNotification({
-        recipientId: absence.crewId,
-        title: "Absence Status Updated",
-        message: `Your absence on ${format(parseISO(absence.date), "MMMM d, yyyy")} has been marked as ${newStatus}.`,
-        type: newStatus === "excused" ? "info" : "warning",
-      })
+      showNotification("success", "Status Updated", `The absence has been marked as ${newStatus}.`)
+    } catch (error) {
+      console.error("Error updating absence status:", error)
+      showNotification("error", "Error", "Failed to update absence status.")
     }
-
-    showNotification("success", "Status Updated", `The absence has been marked as ${newStatus}.`)
   }
 
-  const getEmployeeName = (crewId: number) => {
-    const crew = crews.find((c) => c.id === crewId)
-    return crew ? `${crew.firstName} ${crew.surname}` : "Unknown Employee"
-  }
-
-  const getBranchName = (crewId: number) => {
-    const branch = getAssignedBranch(crewId)
-    return branch ? branch.branchName : "Unassigned"
+  const getEmployeeName = (employeeId: string | number, absence?: Absence) => {
+    // First check if the absence has the name stored
+    if (absence?.employeeName) {
+      return absence.employeeName
+    }
+    // Fall back to looking up from employees list
+    const emp = employees.find((e) => String(e.id) === String(employeeId))
+    return emp ? `${emp.firstName} ${emp.surname}` : "Unknown Employee"
   }
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Absence Management</h1>
-        <p className="text-muted-foreground">Track and manage employee absences</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Absence Management</h1>
+          <p className="text-muted-foreground">Track and manage employee absences</p>
+        </div>
+        <Button variant="outline" onClick={fetchData} disabled={isLoading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="unplanned">Unplanned Absences</TabsTrigger>
+          <TabsTrigger value="unplanned">
+            Unplanned Absences
+            {absences.length > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {absences.length}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="record">Record Absence</TabsTrigger>
         </TabsList>
 
@@ -169,9 +193,11 @@ export default function AbsencesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {unplannedAbsences.length > 0 ? (
+              {isLoading ? (
+                <div className="py-8 text-center text-muted-foreground">Loading absence data...</div>
+              ) : absences.length > 0 ? (
                 <div className="space-y-4">
-                  {unplannedAbsences.map((absence) => (
+                  {absences.map((absence) => (
                     <div
                       key={absence.id}
                       className={`p-4 border rounded-md ${
@@ -183,7 +209,7 @@ export default function AbsencesPage() {
                       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="font-medium text-lg">{getEmployeeName(absence.crewId)}</h3>
+                            <h3 className="font-medium text-lg">{getEmployeeName(absence.employeeId, absence)}</h3>
                             <Badge variant={absence.status === "excused" ? "default" : "destructive"}>
                               {absence.status === "excused" ? "Excused" : "Unexcused"}
                             </Badge>
@@ -191,7 +217,6 @@ export default function AbsencesPage() {
 
                           <div className="text-sm text-muted-foreground mt-1">
                             <div>Date: {format(parseISO(absence.date), "MMMM d, yyyy")}</div>
-                            <div>Branch: {getBranchName(absence.crewId)}</div>
                           </div>
 
                           <div className="mt-2 text-sm">
@@ -212,7 +237,7 @@ export default function AbsencesPage() {
                             <Button
                               variant="outline"
                               className="border-green-500 text-green-600 hover:bg-green-50 hover:text-green-700"
-                              onClick={() => handleUpdateAbsenceStatus(absence.id, "excused")}
+                              onClick={() => handleUpdateAbsenceStatus(absence.id!, "excused")}
                             >
                               <CheckCircle className="h-4 w-4 mr-2" />
                               Mark Excused
@@ -223,7 +248,7 @@ export default function AbsencesPage() {
                             <Button
                               variant="outline"
                               className="border-red-500 text-red-600 hover:bg-red-50 hover:text-red-700"
-                              onClick={() => handleUpdateAbsenceStatus(absence.id, "unexcused")}
+                              onClick={() => handleUpdateAbsenceStatus(absence.id!, "unexcused")}
                             >
                               <XCircle className="h-4 w-4 mr-2" />
                               Mark Unexcused
@@ -235,7 +260,7 @@ export default function AbsencesPage() {
                   ))}
                 </div>
               ) : (
-                <div className="py-8 text-center text-muted-foreground">No unplanned absences recorded</div>
+                <div className="py-8 text-center text-muted-foreground">No absences recorded</div>
               )}
             </CardContent>
           </Card>
@@ -250,80 +275,87 @@ export default function AbsencesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="crewId">Employee</Label>
-                  <Select value={absenceForm.crewId} onValueChange={(value) => handleSelectChange("crewId", value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select employee" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {filteredCrews.map((crew) => (
-                        <SelectItem key={crew.id} value={crew.id.toString()}>
-                          {crew.firstName} {crew.surname}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {isLoading ? (
+                <div className="py-8 text-center text-muted-foreground">Loading employee data...</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="employeeId">Employee</Label>
+                    <Select
+                      value={absenceForm.employeeId}
+                      onValueChange={(value) => handleSelectChange("employeeId", value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select employee" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {filteredEmployees.map((emp) => (
+                          <SelectItem key={emp.id} value={String(emp.id)}>
+                            {emp.firstName} {emp.surname}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="date">Absence Date</Label>
-                  <Input
-                    id="date"
-                    name="date"
-                    type="date"
-                    value={absenceForm.date}
-                    onChange={handleInputChange}
-                    max={format(new Date(), "yyyy-MM-dd")}
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="date">Absence Date</Label>
+                    <Input
+                      id="date"
+                      name="date"
+                      type="date"
+                      value={absenceForm.date}
+                      onChange={handleInputChange}
+                      max={format(new Date(), "yyyy-MM-dd")}
+                    />
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="reason">Reason for Absence</Label>
-                  <Textarea
-                    id="reason"
-                    name="reason"
-                    placeholder="Enter the reason for absence"
-                    value={absenceForm.reason}
-                    onChange={handleInputChange}
-                    rows={3}
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reason">Reason for Absence</Label>
+                    <Textarea
+                      id="reason"
+                      name="reason"
+                      placeholder="Enter the reason for absence"
+                      value={absenceForm.reason}
+                      onChange={handleInputChange}
+                      rows={3}
+                    />
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="status">Status</Label>
-                  <Select value={absenceForm.status} onValueChange={(value) => handleSelectChange("status", value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="excused">Excused</SelectItem>
-                      <SelectItem value="unexcused">Unexcused</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="status">Status</Label>
+                    <Select value={absenceForm.status} onValueChange={(value) => handleSelectChange("status", value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="excused">Excused</SelectItem>
+                        <SelectItem value="unexcused">Unexcused</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="notes">Additional Notes</Label>
-                  <Textarea
-                    id="notes"
-                    name="notes"
-                    placeholder="Enter any additional notes"
-                    value={absenceForm.notes}
-                    onChange={handleInputChange}
-                    rows={2}
-                  />
-                </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="notes">Additional Notes</Label>
+                    <Textarea
+                      id="notes"
+                      name="notes"
+                      placeholder="Enter any additional notes"
+                      value={absenceForm.notes}
+                      onChange={handleInputChange}
+                      rows={2}
+                    />
+                  </div>
 
-                <Button
-                  className="w-full"
-                  onClick={handleRecordAbsence}
-                  disabled={isLoading || !absenceForm.crewId || !absenceForm.date || !absenceForm.reason}
-                >
-                  {isLoading ? "Recording..." : "Record Absence"}
-                </Button>
-              </div>
+                  <Button
+                    className="w-full"
+                    onClick={handleRecordAbsence}
+                    disabled={isSubmitting || !absenceForm.employeeId || !absenceForm.date || !absenceForm.reason}
+                  >
+                    {isSubmitting ? "Recording..." : "Record Absence"}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

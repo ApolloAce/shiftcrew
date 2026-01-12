@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-  "build": "next build",
-  "dev": "next dev -p 3001",
-  "lint": "next lint",
-  "start": "next start"
+    "build": "next build",
+    "dev": "next dev -p 3001",
+    "lint": "next lint",
+    "start": "next start"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.0.5",
@@ -19,10 +19,14 @@
     "@radix-ui/react-slot": "latest",
     "@radix-ui/react-tabs": "latest",
     "@radix-ui/react-toast": "^1.1.5",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "chart.js": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "latest",
+    "firebase": "^12.7.0",
+    "firebase-admin": "^13.6.0",
     "immer": "latest",
     "lucide-react": "^0.454.0",
     "next": "^14.2.33",

@@ -12,18 +12,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useCrewStore } from "@/lib/cleanStore"
 
-// Mock admin user data
-const ADMIN_USERS = [
-  { username: "admin", password: "admin123", role: "admin", name: "Administrator" },
-  { username: "manager", password: "manager123", role: "manager", name: "Branch Manager" },
-  { username: "user", password: "user123", role: "user", name: "Staff Member" },
-]
-
 export default function LoginPage() {
   const router = useRouter()
   const { findCrewByCredentials, crews, error, clearError } = useCrewStore()
   const [loginForm, setLoginForm] = useState({
-    username: "",
+    email: "",
     password: "",
     rememberMe: false,
   })
@@ -63,83 +56,39 @@ export default function LoginPage() {
     setLoginForm((prev) => ({ ...prev, rememberMe: checked }))
   }
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoginError("")
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
 
-    // First check if it's an admin login (case insensitive for username)
-    const adminUser = ADMIN_USERS.find(
-      (u) => u.username.toLowerCase() === loginForm.username.toLowerCase() && u.password === loginForm.password,
-    )
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: loginForm.email,
+          password: loginForm.password,
+        }),
+      });
 
-    if (adminUser) {
-      const adminData = {
-        username: adminUser.username,
-        role: adminUser.role,
-        name: adminUser.name,
-        isAdmin: true, // Flag to identify as admin
+      const data = await res.json();
+
+      if (res.ok) {
+        if (loginForm.rememberMe) {
+          localStorage.setItem("shiftmateUser", JSON.stringify(data.user));
+        }
+        sessionStorage.setItem("currentUser", JSON.stringify(data.user));
+
+        router.push(data.user.role === "admin" ? "/dashboard" : "/employee");
+      } else {
+        setLoginError(data.message);
+        setTimeout(() => setLoginError(""), 3000);
       }
-
-      if (loginForm.rememberMe) {
-        localStorage.setItem("shiftmateUser", JSON.stringify(adminData))
-      }
-
-      // Store current user in session storage
-      sessionStorage.setItem("currentUser", JSON.stringify(adminData))
-
-      router.push("/dashboard")
-      return
+    } catch (err) {
+      setLoginError("Login failed");
+      setTimeout(() => setLoginError(""), 3000);
     }
+  };
 
-    // Check if using the demo account (luis/luis123)
-    if (loginForm.username.toLowerCase() === "luis" && loginForm.password === "luis123") {
-      // Create a demo employee session
-      const demoEmployee = {
-        id: 103,
-        firstName: "Luis",
-        surname: "Rodriguez",
-        type: "full-time",
-        isEmployee: true, // Flag to identify as employee
-      }
-
-      if (loginForm.rememberMe) {
-        localStorage.setItem("shiftmateUser", JSON.stringify(demoEmployee))
-      }
-
-      // Store current user in session storage
-      sessionStorage.setItem("currentUser", JSON.stringify(demoEmployee))
-
-      router.push("/employee")
-      return
-    }
-
-    // Regular employee login - no status check needed since admin creates approved accounts
-    const crew = findCrewByCredentials(loginForm.username, loginForm.password)
-
-    if (crew) {
-      const employeeData = {
-        id: crew.id,
-        firstName: crew.firstName,
-        surname: crew.surname,
-        type: crew.type,
-        isEmployee: true, // Flag to identify as employee
-      }
-
-      if (loginForm.rememberMe) {
-        localStorage.setItem("shiftmateUser", JSON.stringify(employeeData))
-      }
-
-      // Store current user in session storage
-      sessionStorage.setItem("currentUser", JSON.stringify(employeeData))
-
-      router.push("/employee")
-    } else {
-      if (!loginError) {
-        setLoginError("Invalid username or password")
-      }
-      setTimeout(() => setLoginError(""), 3000)
-    }
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-secondary-50 to-secondary-200 p-4">
@@ -154,11 +103,11 @@ export default function LoginPage() {
             <div className="space-y-2">
               <Label htmlFor="username">Username or Email</Label>
               <Input
-                id="username"
-                name="username"
+                id="email"
+                name="email"
                 type="text"
                 placeholder="Enter your username or email"
-                value={loginForm.username}
+                value={loginForm.email}
                 onChange={handleInputChange}
                 required
                 className="border-primary-200 focus-visible:ring-primary"

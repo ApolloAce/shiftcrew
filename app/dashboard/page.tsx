@@ -7,44 +7,52 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Search, Users } from "lucide-react"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
+import { getActiveEmployees } from "@/lib/firestore-employee-service"
+import { getAllBranches } from "@/lib/firestore-branch-service"
 
 export default function DashboardPage() {
   const { showNotification } = useNotification()
-  const { toggleAttendance, getCrewsForBranch, getAssignedBranch, getActiveCrews, branches } = useCrewStore()
-  const [attendance, setAttendance] = useState<Record<number, boolean>>({})
+  const [employees, setEmployees] = useState<any[]>([])
+  const [branches, setBranches] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [attendance, setAttendance] = useState<Record<string, boolean>>({})
   const [searchQuery, setSearchQuery] = useState("")
 
-  // Use only active crews for the dashboard
-  const crews = getActiveCrews()
+  // Fetch Firestore employees and branches on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setIsLoading(true)
+        const [emps, brs] = await Promise.all([getActiveEmployees(), getAllBranches()])
+        console.log("Dashboard: Fetched employees from Firestore", emps)
+        console.log("Dashboard: Fetched branches from Firestore", brs)
+        setEmployees(emps)
+        setBranches(brs)
+      } catch (error) {
+        console.error("Dashboard: Error fetching data from Firestore:", error)
+        showNotification("error", "Error", "Failed to load dashboard data")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchData()
+  }, [showNotification])
+
+  // Use employees from Firestore
+  const crews = employees
 
   // Calculate attendance statistics
-  const presentCount = crews.filter((crew) => attendance[crew.id]).length
+  const presentCount = crews.filter((crew) => attendance[String(crew.id)]).length
   const totalCount = crews.length
   const attendancePercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
 
-  useEffect(() => {
-    // Initialize attendance state from store only once when crews change
-    const initialAttendance: Record<number, boolean> = {}
-    crews.forEach((crew) => {
-      initialAttendance[crew.id] = crew.isPresent || false
-    })
-
-    // Compare with current state to avoid unnecessary updates
-    setAttendance((prev) => {
-      // Only update if there are actual differences
-      const needsUpdate = crews.some((crew) => prev[crew.id] !== (crew.isPresent || false))
-      return needsUpdate ? initialAttendance : prev
-    })
-  }, [crews])
-
-  const handleToggleAttendance = (crewId: number) => {
-    const newStatus = !attendance[crewId]
-    setAttendance((prev) => ({ ...prev, [crewId]: newStatus }))
-    toggleAttendance(crewId)
+  const handleToggleAttendance = (crewId: string | number) => {
+    const key = String(crewId)
+    const newStatus = !attendance[key]
+    setAttendance((prev) => ({ ...prev, [key]: newStatus }))
 
     // Find crew details for notification
-    const crew = crews.find((c) => c.id === crewId)
+    const crew = crews.find((c) => String(c.id) === key)
 
     if (crew) {
       showNotification(
@@ -56,18 +64,18 @@ export default function DashboardPage() {
       showNotification(
         newStatus ? "success" : "info",
         `Marked ${newStatus ? "Present" : "Absent"}`,
-        `Crew member has been marked as ${newStatus ? "present" : "absent"}.`,
+        `Employee has been marked as ${newStatus ? "present" : "absent"}.`,
       )
     }
   }
 
-  // Get all crews that match the search query
+  // Get all employees that match the search query
   const filteredCrews = crews.filter((crew) => {
     const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
     return fullName.includes(searchQuery.toLowerCase())
   })
 
-  // Group crews by branch for the attendance section
+  // Group employees by their assigned branch (from Firestore)
   const getCrewsByBranch = () => {
     const result: Record<string, typeof crews> = {
       Unassigned: [],
@@ -78,11 +86,15 @@ export default function DashboardPage() {
       result[branch.branchName] = []
     })
 
-    // Assign crews to their branches
+    // Assign employees to their branches based on branchId field
     filteredCrews.forEach((crew) => {
-      const branch = getAssignedBranch(crew.id)
-      if (branch) {
-        result[branch.branchName].push(crew)
+      if (crew.branchId) {
+        const branch = branches.find((b) => String(b.id) === String(crew.branchId))
+        if (branch) {
+          result[branch.branchName].push(crew)
+        } else {
+          result["Unassigned"].push(crew)
+        }
       } else {
         result["Unassigned"].push(crew)
       }
@@ -109,7 +121,11 @@ export default function DashboardPage() {
           </CardTitle>
           <CardDescription>Current attendance status across all branches</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-8">
+          {isLoading ? (
+            <div className="text-center py-8 text-muted-foreground">Loading dashboard data...</div>
+          ) : (
+            <>
           <div className="flex flex-col space-y-4">
             <div className="flex justify-between items-center">
               <div>
@@ -143,6 +159,8 @@ export default function DashboardPage() {
               {presentCount} out of {totalCount} employees present today
             </div>
           </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
@@ -179,18 +197,19 @@ export default function DashboardPage() {
                                 <div className="font-medium">
                                   {crew.firstName} {crew.surname}
                                 </div>
-                                <div className="text-sm text-muted-foreground">{crew.type}</div>
+                                <div className="text-sm text-muted-foreground">{crew.type || "Employee"}</div>
                               </div>
                               <div className="flex items-center gap-4">
-                                <Badge variant={attendance[crew.id] ? "default" : "destructive"}>
-                                  {attendance[crew.id] ? "Present" : "Absent"}
+                                <Badge variant={attendance[String(crew.id)] ? "default" : "destructive"}>
+                                  {attendance[String(crew.id)] ? "Present" : "Absent"}
                                 </Badge>
                                 <Button
-                                  variant={attendance[crew.id] ? "destructive" : "default"}
+                                  variant={attendance[String(crew.id)] ? "destructive" : "default"}
                                   size="sm"
                                   onClick={() => handleToggleAttendance(crew.id)}
+                                  className="w-full sm:w-auto"
                                 >
-                                  Mark {attendance[crew.id] ? "Absent" : "Present"}
+                                  Mark {attendance[String(crew.id)] ? "Absent" : "Present"}
                                 </Button>
                               </div>
                             </div>
@@ -200,14 +219,14 @@ export default function DashboardPage() {
                     ),
                 )}
 
-                {filteredCrews.length === 0 && (
+                {filteredCrews.length === 0 && searchQuery && (
                   <div className="text-center py-8 text-muted-foreground">
-                    No crew members found matching "{searchQuery}"
+                    No employees found matching "{searchQuery}"
                   </div>
                 )}
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">No crew members registered</div>
+              <div className="text-center py-8 text-muted-foreground">No employees registered</div>
             )}
           </CardContent>
         </Card>
@@ -220,7 +239,10 @@ export default function DashboardPage() {
             {branches.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {branches.map((branch) => {
-                  const assignedCrews = getCrewsForBranch(branch.id)
+                  // Get employees assigned to this branch
+                  const assignedEmps = filteredCrews.filter(
+                    (emp) => emp.branchId && String(emp.branchId) === String(branch.id),
+                  )
 
                   return (
                     <Card key={branch.id} className="border shadow-none">
@@ -229,26 +251,26 @@ export default function DashboardPage() {
                         <p className="text-sm text-muted-foreground">{branch.address}</p>
                       </CardHeader>
                       <CardContent>
-                        {assignedCrews.length > 0 ? (
+                        {assignedEmps.length > 0 ? (
                           <div className="space-y-2">
-                            {assignedCrews.map((crew) => (
+                            {assignedEmps.map((emp) => (
                               <div
-                                key={crew.id}
+                                key={emp.id}
                                 className={`flex justify-between items-center p-2 rounded-md text-sm ${
-                                  attendance[crew.id]
+                                  attendance[String(emp.id)]
                                     ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"
                                     : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
                                 }`}
                               >
                                 <span>
-                                  {crew.firstName} {crew.surname}
+                                  {emp.firstName} {emp.surname}
                                 </span>
-                                <span>{attendance[crew.id] ? "✓" : "✗"}</span>
+                                <span>{attendance[String(emp.id)] ? "✓" : "✗"}</span>
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <div className="text-center py-4 text-sm text-muted-foreground">No crews assigned</div>
+                          <div className="text-center py-4 text-sm text-muted-foreground">No employees assigned</div>
                         )}
                       </CardContent>
                     </Card>

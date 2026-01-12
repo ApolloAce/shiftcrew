@@ -25,7 +25,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("Uncaught error:", error, errorInfo)
+    const timestamp = new Date().toISOString()
+    console.error(`[ErrorBoundary] ${timestamp} Uncaught error:`, error)
+    console.error(`[ErrorBoundary] ${timestamp} Error info:`, errorInfo)
+    console.error(`[ErrorBoundary] ${timestamp} Stack:`, error.stack)
+    console.error(`[ErrorBoundary] ${timestamp} Component stack:`, errorInfo.componentStack)
   }
 
   public render() {
