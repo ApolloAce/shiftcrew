@@ -39,7 +39,7 @@ ChartJS.register(
 )
 
 interface ChartProps extends React.HTMLAttributes<HTMLCanvasElement> {
-  type: "pie" | "doughnut"
+  type: "pie" | "doughnut" | "bar" | "line"
   data: ChartData
   options?: ChartOptions
   width?: number

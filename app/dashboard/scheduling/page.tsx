@@ -14,6 +14,7 @@ import { useCrewStore } from "@/lib/cleanStore"
 import { getAllBranches as getBranchesFromFirestore } from "@/lib/firestore-branch-service"
 import { getActiveEmployees as getEmployeesFromFirestore } from "@/lib/firestore-employee-service"
 import { addSchedule as addScheduleToFirestore, getSchedulesForDate as getSchedulesForDateFromFirestore } from "@/lib/firestore-schedule-service"
+import { saveManualOverride, getOverridesForWeek } from "@/lib/firestore-manual-override-service"
 import { Search, RotateCcw, Edit, Calendar, Users, AlertTriangle, Clock } from "lucide-react"
 
 // Scheduling now uses live store data. No local sampleEmployees are present so the app starts empty.
@@ -73,7 +74,6 @@ export default function SchedulingPage() {
   const [scheduleTime, setScheduleTime] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedBranchForDisplay, setSelectedBranchForDisplay] = useState<string | null>(null)
-  const [todayLatestSchedule, setTodayLatestSchedule] = useState<any>(null)
   const [appliedRotation, setAppliedRotation] = useState<any[]>([])
 
   const [showRotationPreview, setShowRotationPreview] = useState(false)
@@ -84,6 +84,7 @@ export default function SchedulingPage() {
   const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
   const [pendingAssignments, setPendingAssignments] = useState<Record<string, string>>({})
   const [debugStatus, setDebugStatus] = useState<string | null>(null)
+  const [weeklyOverrides, setWeeklyOverrides] = useState<any[]>([])
 
   const generateRotation = (opts?: { avoidSameBranch?: boolean }) => {
     // Prefer Firestore employees for preview/rotation when available; fall back to store crews
@@ -254,32 +255,63 @@ export default function SchedulingPage() {
     fetchFireData()
   }, [])
 
-  // Fetch today's latest schedule on component mount and when schedules are saved
-  const fetchTodayLatestSchedule = async () => {
+  // Fetch current week's manual overrides
+  const fetchWeeklyOverrides = async () => {
     try {
       const today = new Date().toISOString().split("T")[0]
-      const schedulesForToday = await getSchedulesForDateFromFirestore(today)
+      const overrides = await getOverridesForWeek(today)
+      setWeeklyOverrides(overrides)
+      console.log("Weekly overrides loaded:", overrides.length)
+    } catch (err) {
+      console.error("Error fetching weekly overrides:", err)
+    }
+  }
+
+  useEffect(() => {
+    fetchWeeklyOverrides()
+  }, [])
+
+  // Fetch current week's schedule and load it into appliedRotation
+  const fetchCurrentWeekSchedule = async () => {
+    try {
+      const today = new Date().toISOString().split("T")[0]
+      const schedules = await getSchedulesForDateFromFirestore(today)
       
-      if (schedulesForToday && schedulesForToday.length > 0) {
-        // Sort by createdAt and get the latest one
-        const latestSchedule = schedulesForToday.sort((a: any, b: any) => {
+      if (schedules && schedules.length > 0) {
+        // Get the latest schedule for today
+        const latestSchedule = schedules.sort((a: any, b: any) => {
           const dateA = new Date(a.createdAt || 0).getTime()
           const dateB = new Date(b.createdAt || 0).getTime()
           return dateB - dateA
         })[0]
         
-        setTodayLatestSchedule(latestSchedule)
-        console.log("Today's latest schedule:", latestSchedule)
-      } else {
-        setTodayLatestSchedule(null)
+        // Convert schedule format to appliedRotation format
+        if (latestSchedule.branchAssignments && latestSchedule.branchAssignments.length > 0) {
+          const rotationData: any[] = []
+          
+          for (const branchAssignment of latestSchedule.branchAssignments) {
+            for (const employee of branchAssignment.employees) {
+              rotationData.push({
+                id: employee.employeeId,
+                firstName: employee.employeeName ? employee.employeeName.split(" ")[0] : "Unknown",
+                surname: employee.employeeName ? employee.employeeName.split(" ").slice(1).join(" ") : "",
+                nextWeekBranch: branchAssignment.branchName,
+                nextWeekShift: employee.shift || "AM",
+              })
+            }
+          }
+          
+          setAppliedRotation(rotationData)
+          console.log("Current week schedule loaded:", rotationData.length, "assignments")
+        }
       }
     } catch (err) {
-      console.error("Error fetching today's schedule:", err)
+      console.error("Error fetching current week schedule:", err)
     }
   }
 
   useEffect(() => {
-    fetchTodayLatestSchedule()
+    fetchCurrentWeekSchedule()
   }, [])
 
   // Wrapped regenerate so we can show feedback and ensure UI updates
@@ -569,8 +601,9 @@ export default function SchedulingPage() {
             (a) => String(a.employeeId) === String(employee.id) && String(a.branchId) === String(branch.id),
           )
 
+          const employeeName = `${employee.firstName} ${employee.surname}`
+
           if (!alreadyAdded) {
-            const employeeName = `${employee.firstName} ${employee.surname}`
             allAssignments.push({
               employeeId: String(employee.id),
               employeeName,
@@ -578,6 +611,25 @@ export default function SchedulingPage() {
               branchName: branch.branchName || branch.name,
               shift: "AM",
             })
+          }
+          
+          // Save as manual override in separate collection
+          try {
+            const dayOfWeek = new Date(scheduleDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long" })
+            await saveManualOverride({
+              employeeId: String(employee.id),
+              employeeName,
+              date: scheduleDate,
+              dayOfWeek,
+              overrideBranchId: String(branch.id),
+              overrideBranchName: branch.branchName || branch.name,
+              shift: "AM",
+              reason: "Manual override for schedule",
+            })
+            console.log(`✓ Manual override saved for ${employeeName} on ${scheduleDate}`)
+          } catch (err) {
+            console.error("Error saving manual override:", err)
+            // Don't fail the entire save if override saving fails
           }
         }
       }
@@ -628,11 +680,6 @@ export default function SchedulingPage() {
     setShowSaveModal(false)
 
     showNotification("success", "Schedule Saved", `Schedule has been saved for ${scheduleDate} at ${scheduleTime}.`)
-    
-    // Refresh today's latest schedule if it was saved for today
-    if (scheduleDate === new Date().toISOString().split("T")[0]) {
-      fetchTodayLatestSchedule()
-    }
   }
 
   const getCurrentWeekDates = () => {
@@ -708,8 +755,6 @@ export default function SchedulingPage() {
                       const nowTime = new Date().toTimeString().slice(0, 5)
                       const id = await addScheduleToFirestore({ date: todayISO, time: nowTime, assignments: [] })
                       setDebugStatus(`Saved: ${id}`)
-                      // refresh
-                      fetchTodayLatestSchedule()
                     } catch (e: any) {
                       console.error("Test save error:", e)
                       setDebugStatus(`Error: ${e?.message || String(e)}`)
@@ -803,50 +848,6 @@ export default function SchedulingPage() {
             </CardContent>
           </Card>
 
-          {todayLatestSchedule && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Calendar className="h-4 w-4" />
-                  Today's Latest Schedule
-                </CardTitle>
-                <p className="text-xs text-muted-foreground">
-                  {todayLatestSchedule.time} on {todayLatestSchedule.date}
-                </p>
-              </CardHeader>
-              <CardContent className="pt-2">
-                {todayLatestSchedule.assignments && todayLatestSchedule.assignments.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {fireBranches.map((branch: any) => {
-                      const branchAssignments = todayLatestSchedule.assignments.filter(
-                        (a: any) => String(a.branchId) === String(branch.id)
-                      )
-                      
-                      return (
-                        <div key={branch.id} className="border rounded p-2">
-                          <div className="font-medium text-xs mb-1">{branch.branchName}</div>
-                          {branchAssignments.length > 0 ? (
-                            <div className="space-y-0.5">
-                              {branchAssignments.map((assignment: any, idx: number) => (
-                                <div key={idx} className="text-xs text-muted-foreground">
-                                  • {assignment.employeeName || assignment.employeeId} <span className="text-gray-500">({assignment.shift || "AM"})</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground italic">No crew</div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-2 text-xs text-muted-foreground">No assignments</div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
           <Dialog open={showRegenerateConfirm} onOpenChange={setShowRegenerateConfirm}>
             <DialogContent className="max-w-lg">
               <DialogHeader>
@@ -892,14 +893,32 @@ export default function SchedulingPage() {
                                 AM Shift (7am - 2pm)
                               </div>
                               <div className="space-y-2">
-                                {amShift.map((employee) => (
-                                  <div key={employee.id} className="p-3 border rounded-lg bg-blue-50/50">
-                                    <div className="font-medium text-sm">
-                                      {employee.firstName} {employee.surname}
+                                {amShift.map((employee) => {
+                                  // Check if this employee has a manual override for today
+                                  const today = new Date().toISOString().split("T")[0]
+                                  const override = weeklyOverrides.find(
+                                    (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                  )
+                                  
+                                  return (
+                                    <div key={employee.id} className={`p-3 border rounded-lg ${override ? "bg-purple-100 border-purple-400" : "bg-blue-50/50"}`}>
+                                      {override && (
+                                        <div className="flex items-center gap-1 mb-1">
+                                          <AlertTriangle className="h-3 w-3 text-purple-600" />
+                                          <span className="text-xs font-semibold text-purple-600">Manual Override</span>
+                                        </div>
+                                      )}
+                                      <div className="font-medium text-sm">
+                                        {employee.firstName} {employee.surname}
+                                      </div>
+                                      {override ? (
+                                        <div className="text-xs text-purple-700 mt-1">Override: {override.overrideBranchName}</div>
+                                      ) : (
+                                        <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                      )}
                                     </div>
-                                    <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
-                                  </div>
-                                ))}
+                                  )
+                                })}
                               </div>
                             </div>
                           )}
@@ -911,28 +930,64 @@ export default function SchedulingPage() {
                                 PM Shift (2pm - 10pm)
                               </div>
                               <div className="space-y-2">
-                                {pmShift.map((employee) => (
-                                  <div key={employee.id} className="p-3 border rounded-lg bg-orange-50/50">
-                                    <div className="font-medium text-sm">
-                                      {employee.firstName} {employee.surname}
+                                {pmShift.map((employee) => {
+                                  // Check if this employee has a manual override for today
+                                  const today = new Date().toISOString().split("T")[0]
+                                  const override = weeklyOverrides.find(
+                                    (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                  )
+                                  
+                                  return (
+                                    <div key={employee.id} className={`p-3 border rounded-lg ${override ? "bg-purple-100 border-purple-400" : "bg-orange-50/50"}`}>
+                                      {override && (
+                                        <div className="flex items-center gap-1 mb-1">
+                                          <AlertTriangle className="h-3 w-3 text-purple-600" />
+                                          <span className="text-xs font-semibold text-purple-600">Manual Override</span>
+                                        </div>
+                                      )}
+                                      <div className="font-medium text-sm">
+                                        {employee.firstName} {employee.surname}
+                                      </div>
+                                      {override ? (
+                                        <div className="text-xs text-purple-700 mt-1">Override: {override.overrideBranchName}</div>
+                                      ) : (
+                                        <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                      )}
                                     </div>
-                                    <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
-                                  </div>
-                                ))}
+                                  )
+                                })}
                               </div>
                             </div>
                           )}
 
                           {amShift.length === 0 && pmShift.length === 0 && crewForBranch.length > 0 && (
                             <div className="space-y-2">
-                              {crewForBranch.map((employee) => (
-                                <div key={employee.id} className="p-3 border rounded-lg bg-card">
-                                  <div className="font-medium text-sm">
-                                    {employee.firstName} {employee.surname}
+                              {crewForBranch.map((employee) => {
+                                // Check if this employee has a manual override for today
+                                const today = new Date().toISOString().split("T")[0]
+                                const override = weeklyOverrides.find(
+                                  (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                )
+                                
+                                return (
+                                  <div key={employee.id} className={`p-3 border rounded-lg ${override ? "bg-purple-100 border-purple-400" : "bg-card"}`}>
+                                    {override && (
+                                      <div className="flex items-center gap-1 mb-1">
+                                        <AlertTriangle className="h-3 w-3 text-purple-600" />
+                                        <span className="text-xs font-semibold text-purple-600">Manual Override</span>
+                                      </div>
+                                    )}
+                                    <div className="font-medium text-sm">
+                                      {employee.firstName} {employee.surname}
+                                    </div>
+                                    {override ? (
+                                      <div className="text-xs text-purple-700 mt-1">Override: {override.overrideBranchName}</div>
+                                    ) : (
+                                      <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
+                                    )}
                                   </div>
-                                  <div className="text-xs text-muted-foreground mt-1">Assigned: {branch.name}</div>
-                                </div>
-                              ))}
+                                )
+                              })}
                             </div>
                           )}
 
@@ -1218,9 +1273,6 @@ export default function SchedulingPage() {
 
                     showNotification("success", "Rotation Applied", "Next week's rotation has been scheduled and set as the current rotation.")
                     setShowRotationPreview(false)
-                    
-                    // Refresh today's latest schedule
-                    fetchTodayLatestSchedule()
                   }}
                 >
                   Apply Rotation

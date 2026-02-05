@@ -4,7 +4,8 @@ import { useState, useMemo, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
-import { CheckCircle2, XCircle, BarChart2, Users, MapPin } from "lucide-react"
+import { getSchedulesForDate } from "@/lib/firestore-schedule-service"
+import { CheckCircle2, XCircle, BarChart2, Users, MapPin, Calendar } from "lucide-react"
 import { Chart, ChartContainer } from "@/components/ui/chart"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -17,10 +18,17 @@ export default function ReportsPage() {
   const [branches, setBranches] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date())
+  const [weekStartDate, setWeekStartDate] = useState<Date>(() => {
+    const today = new Date()
+    const day = today.getDay()
+    const diff = today.getDate() - day + (day === 0 ? -6 : 1)
+    return new Date(today.setDate(diff))
+  })
   const [activeTab, setActiveTab] = useState("attendance")
   const [selectedBranch, setSelectedBranch] = useState<string>("all")
   const [timeRange, setTimeRange] = useState<"day" | "week" | "month">("week")
+  const [leavePeriod, setLeavePeriod] = useState<"weekly" | "monthly" | "annually">("monthly")
+  const [weekSchedules, setWeekSchedules] = useState<any[]>([])
 
   // Fetch Firestore data on mount
   useEffect(() => {
@@ -43,6 +51,134 @@ export default function ReportsPage() {
 
   // Use employees from Firestore
   const crews = employees
+
+  const crewsWithSampleLeaves = useMemo(() => {
+    return crews.map((crew: any) => ({
+      ...crew,
+      leaveRequests: [
+        {
+          id: 1,
+          crewId: crew.id,
+          startDate: "2025-01-10",
+          endDate: "2025-01-12",
+          reason: "Personal",
+          status: "approved" as const,
+          type: "personal" as const,
+          createdAt: "2025-01-01",
+        },
+        {
+          id: 2,
+          crewId: crew.id,
+          startDate: "2025-02-14",
+          endDate: "2025-02-16",
+          reason: "Sick Leave",
+          status: "approved" as const,
+          type: "sick" as const,
+          createdAt: "2025-02-01",
+        },
+        {
+          id: 3,
+          crewId: crew.id,
+          startDate: "2025-03-05",
+          endDate: "2025-03-07",
+          reason: "Vacation",
+          status: "approved" as const,
+          type: "vacation" as const,
+          createdAt: "2025-02-20",
+        },
+        {
+          id: 4,
+          crewId: crew.id,
+          startDate: "2025-04-12",
+          endDate: "2025-04-14",
+          reason: "Family",
+          status: "pending" as const,
+          type: "personal" as const,
+          createdAt: "2025-04-01",
+        },
+        {
+          id: 5,
+          crewId: crew.id,
+          startDate: "2025-05-20",
+          endDate: "2025-05-22",
+          reason: "Vacation",
+          status: "approved" as const,
+          type: "vacation" as const,
+          createdAt: "2025-05-05",
+        },
+        {
+          id: 6,
+          crewId: crew.id,
+          startDate: "2025-06-10",
+          endDate: "2025-06-12",
+          reason: "Medical",
+          status: "approved" as const,
+          type: "sick" as const,
+          createdAt: "2025-06-01",
+        },
+        {
+          id: 7,
+          crewId: crew.id,
+          startDate: "2025-07-25",
+          endDate: "2025-07-27",
+          reason: "Vacation",
+          status: "approved" as const,
+          type: "vacation" as const,
+          createdAt: "2025-07-10",
+        },
+        {
+          id: 8,
+          crewId: crew.id,
+          startDate: "2025-08-15",
+          endDate: "2025-08-17",
+          reason: "Personal",
+          status: "rejected" as const,
+          type: "personal" as const,
+          createdAt: "2025-08-01",
+        },
+        {
+          id: 9,
+          crewId: crew.id,
+          startDate: "2025-09-08",
+          endDate: "2025-09-10",
+          reason: "Sick Leave",
+          status: "approved" as const,
+          type: "sick" as const,
+          createdAt: "2025-09-01",
+        },
+        {
+          id: 10,
+          crewId: crew.id,
+          startDate: "2025-10-18",
+          endDate: "2025-10-20",
+          reason: "Vacation",
+          status: "approved" as const,
+          type: "vacation" as const,
+          createdAt: "2025-10-05",
+        },
+        {
+          id: 11,
+          crewId: crew.id,
+          startDate: "2025-11-05",
+          endDate: "2025-11-07",
+          reason: "Personal",
+          status: "pending" as const,
+          type: "personal" as const,
+          createdAt: "2025-11-01",
+        },
+        {
+          id: 12,
+          crewId: crew.id,
+          startDate: "2025-12-22",
+          endDate: "2025-12-26",
+          reason: "Holiday Vacation",
+          status: "approved" as const,
+          type: "vacation" as const,
+          createdAt: "2025-12-01",
+        },
+      ],
+    }))
+  }, [crews])
 
   // Helper function to get employees for a branch
   const getCrewsForBranch = (branchId: string | number) => {
@@ -81,40 +217,6 @@ export default function ReportsPage() {
     ],
   }
 
-  // Calculate branch distribution
-  const branchNames = branches.map((branch) => branch.branchName)
-  const branchCounts = branches.map((branch) => getCrewsForBranch(branch.id).length)
-
-  // Format data for branch distribution pie chart
-  const branchDistributionData = {
-    labels: branchNames,
-    datasets: [
-      {
-        label: "Branch Distribution",
-        data: branchCounts,
-        backgroundColor: [
-          "rgba(16, 185, 129, 0.7)", // green
-          "rgba(244, 63, 94, 0.7)", // rose
-          "rgba(6, 182, 212, 0.7)", // cyan
-          "rgba(139, 92, 246, 0.7)", // purple
-          "rgba(245, 158, 11, 0.7)", // amber
-          "rgba(132, 204, 22, 0.7)", // lime
-          "rgba(236, 72, 153, 0.7)", // pink
-        ],
-        borderColor: [
-          "rgba(16, 185, 129, 1)",
-          "rgba(244, 63, 94, 1)",
-          "rgba(6, 182, 212, 1)",
-          "rgba(139, 92, 246, 1)",
-          "rgba(245, 158, 11, 1)",
-          "rgba(132, 204, 22, 1)",
-          "rgba(236, 72, 153, 1)",
-        ],
-        borderWidth: 1,
-      },
-    ],
-  }
-
   // Chart options
   const chartOptions = {
     responsive: true,
@@ -141,121 +243,405 @@ export default function ReportsPage() {
     return branches.find((branch) => getCrewsForBranch(branch.id).some((c) => String(c.id) === String(crewId)))
   }
 
-  // Generate historical attendance data for the selected date
+  // Helper function to get week start (Monday) from a date
+  const getWeekStart = (date: Date): Date => {
+    const d = new Date(date)
+    const day = d.getDay()
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+    return new Date(d.setDate(diff))
+  }
+
+  // Helper function to get the date string from a date
+  const getDateString = (date: Date): string => {
+    return date.toISOString().split('T')[0]
+  }
+
+  // Fetch schedules for the entire week (Monday to Sunday)
+  useEffect(() => {
+    const fetchWeekSchedules = async () => {
+      try {
+        const allWeekSchedules: any[] = []
+        // Fetch schedules for Monday to Sunday
+        for (let i = 0; i < 7; i++) {
+          const dateToFetch = new Date(weekStartDate)
+          dateToFetch.setDate(dateToFetch.getDate() + i)
+          const dateString = getDateString(dateToFetch)
+          const schedules = await getSchedulesForDate(dateString)
+          if (schedules && schedules.length > 0) {
+            const latestSchedule = schedules.sort((a: any, b: any) => {
+              const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
+              const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
+              return dateB - dateA
+            })[0]
+            allWeekSchedules.push(latestSchedule)
+          }
+        }
+        setWeekSchedules(allWeekSchedules)
+        console.log('Week schedules loaded:', allWeekSchedules.length, 'days')
+      } catch (error) {
+        console.error('Error fetching week schedules:', error)
+        setWeekSchedules([])
+      }
+    }
+    fetchWeekSchedules()
+  }, [weekStartDate])
+
+  // Generate historical attendance data for the entire week from Firestore schedules
   const attendanceHistory = useMemo(() => {
-    // Check if the selected date is today
-    const isCurrentDay = isToday(selectedDate)
-    const dateValue = selectedDate.getTime()
-    const isWeekendDay = isWeekend(selectedDate)
-
-    // Group employees by branch
     const branchEmployees: Record<string, any[]> = {}
-
-    // Initialize with "Unassigned" category
+    
+    // Initialize branches
     branchEmployees["Unassigned"] = []
-
-    // Initialize all branches
     branches.forEach((branch) => {
       branchEmployees[branch.branchName] = []
     })
 
-    // Process each employee
+    // Count attendance across the week
+    const employeeAttendance: Record<string, { present: number; total: number }> = {}
+
+    // Initialize attendance tracking for all employees
     crews.forEach((crew) => {
-      let wasPresent
+      employeeAttendance[String(crew.id)] = { present: 0, total: 0 }
+    })
 
-      // For now, use simulated attendance data
-      const basePresentChance = crew.type === "full-time" ? 90 : 60
-      const hash = ((crew.id as any) * 31 + dateValue) % 100
-      wasPresent = hash < basePresentChance
+    // Count presence for each day in the week
+    weekSchedules.forEach((schedule: any) => {
+      if (schedule && schedule.branchAssignments) {
+        schedule.branchAssignments.forEach((branchAssignment: any) => {
+          const employees = branchAssignment.employees || []
+          employees.forEach((emp: any) => {
+            const empId = String(emp.employeeId)
+            if (employeeAttendance[empId]) {
+              employeeAttendance[empId].total++
+              if (emp.isPresent === true) {
+                employeeAttendance[empId].present++
+              }
+            }
+          })
+        })
+      }
+    })
 
-      // Determine which branch they worked at
+    // Build attendance history from week data
+    crews.forEach((crew) => {
       const assignedBranch = getAssignedBranch(crew.id)
       const branchName = assignedBranch ? assignedBranch.branchName : "Unassigned"
-
-      // Add to the appropriate branch group
+      const attendance = employeeAttendance[String(crew.id)]
+      
       branchEmployees[branchName].push({
         ...crew,
-        wasPresent,
+        wasPresent: attendance.present > 0,
+        presentDays: attendance.present,
+        totalDays: attendance.total,
       })
     })
 
-    // Convert to array format for rendering
     return Object.entries(branchEmployees)
-      .filter(([_, employees]) => employees.length > 0)
-      .map(([branchName, employees]) => ({
+      .filter(([_, employees]: [string, any[]]) => employees.length > 0)
+      .map(([branchName, employees]: [string, any[]]) => ({
         branchName,
         employees,
-        presentCount: employees.filter((emp) => emp.wasPresent).length,
-        absentCount: employees.filter((emp) => !emp.wasPresent).length,
+        presentCount: employees.filter((emp: any) => emp.wasPresent).length,
+        absentCount: employees.filter((emp: any) => !emp.wasPresent).length,
       }))
-  }, [crews, branches, selectedDate])
+  }, [weekSchedules, crews, branches])
 
-  // Calculate overall attendance for the selected date
+  // Calculate overall attendance for the week
   const overallAttendance = useMemo(() => {
-    const allEmployees = attendanceHistory.flatMap((branch) => branch.employees)
-    const presentCount = allEmployees.filter((emp) => emp.wasPresent).length
+    const allEmployees = attendanceHistory.flatMap((branch: any) => branch.employees)
+    const presentCount = allEmployees.filter((emp: any) => emp.wasPresent).length
     const totalCount = allEmployees.length
     const rate = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
 
     return { presentCount, totalCount, rate, absentCount: totalCount - presentCount }
   }, [attendanceHistory])
 
-  // Generate attendance trend data
-  const attendanceTrendData = useMemo(() => {
-    const days = timeRange === "day" ? 7 : timeRange === "week" ? 4 : 12
-    const labels = []
-    const presentData = []
-    const absentData = []
-    const percentageData = []
+  // Calculate crew allocation by branch from schedules
+  const crewAllocationByBranch = useMemo(() => {
+    const allocationMap = new Map<string, { fullTime: number; partTime: number; total: number; presentCount: number }>()
 
-    for (let i = days - 1; i >= 0; i--) {
-      const date =
-        timeRange === "day"
-          ? subDays(new Date(), i)
-          : timeRange === "week"
-            ? subDays(new Date(), i * 7)
-            : subMonths(new Date(), i)
+    // Initialize map for all branches
+    branches.forEach((branch) => {
+      allocationMap.set(branch.branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
+    })
 
-      const label =
-        timeRange === "day"
-          ? format(date, "EEE")
-          : timeRange === "week"
-            ? `Week ${format(date, "w")}`
-            : format(date, "MMM")
+    // Count employees by type from all schedules
+    weekSchedules.forEach((schedule: any) => {
+      if (schedule && schedule.branchAssignments) {
+        schedule.branchAssignments.forEach((branchAssignment: any) => {
+          const branchName = branchAssignment.branchName
+          const employees = branchAssignment.employees || []
+          
+          if (!allocationMap.has(branchName)) {
+            allocationMap.set(branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
+          }
 
-      labels.push(label)
+          const branchData = allocationMap.get(branchName)!
+          
+          employees.forEach((emp: any) => {
+            const empId = String(emp.employeeId)
+            // Find the employee in the crews list to get their type
+            const employeeRecord = crews.find((c) => String(c.id) === empId)
+            
+            // Count by employee type
+            if (employeeRecord) {
+              if (employeeRecord.type === "full-time") {
+                branchData.fullTime++
+              } else if (employeeRecord.type === "part-time") {
+                branchData.partTime++
+              }
+            }
+            
+            branchData.total++
+            if (emp.isPresent === true) {
+              branchData.presentCount++
+            }
+          })
+        })
+      }
+    })
 
-      // Simulate attendance data
-      const totalEmployees = crews.length
-      const presentPercentage = Math.floor(Math.random() * 30) + 70 // 70-99%
-      const presentCount = Math.round((totalEmployees * presentPercentage) / 100)
-      const absentCount = totalEmployees - presentCount
+    // Convert map to array and calculate attendance rate
+    return Array.from(allocationMap.entries()).map(([branchName, data]) => {
+      const attendanceRate = data.total > 0 ? Math.round((data.presentCount / data.total) * 100) : 0
+      return {
+        branchName,
+        fullTime: data.fullTime,
+        partTime: data.partTime,
+        total: data.total,
+        attendanceRate,
+      }
+    })
+  }, [weekSchedules, crews, branches])
 
-      presentData.push(presentCount)
-      absentData.push(absentCount)
-      percentageData.push(presentPercentage)
-    }
+  // Calculate branch distribution from Firestore schedules
+  const branchDistributionData = useMemo(() => {
+    const labels = crewAllocationByBranch.map((alloc: any) => alloc.branchName)
+    const data = crewAllocationByBranch.map((alloc: any) => alloc.total)
 
     return {
       labels,
       datasets: [
         {
+          label: "Branch Distribution",
+          data,
+          backgroundColor: [
+            "rgba(16, 185, 129, 0.7)", // green
+            "rgba(244, 63, 94, 0.7)", // rose
+            "rgba(6, 182, 212, 0.7)", // cyan
+            "rgba(139, 92, 246, 0.7)", // purple
+            "rgba(245, 158, 11, 0.7)", // amber
+            "rgba(132, 204, 22, 0.7)", // lime
+            "rgba(236, 72, 153, 0.7)", // pink
+          ],
+          borderColor: [
+            "rgba(16, 185, 129, 1)",
+            "rgba(244, 63, 94, 1)",
+            "rgba(6, 182, 212, 1)",
+            "rgba(139, 92, 246, 1)",
+            "rgba(245, 158, 11, 1)",
+            "rgba(132, 204, 22, 1)",
+            "rgba(236, 72, 153, 1)",
+          ],
+          borderWidth: 1,
+        },
+      ],
+    }
+  }, [crewAllocationByBranch])
+
+  // Generate attendance trend data
+  const attendanceTrendData = useMemo(() => {
+    if (timeRange === "day") {
+      // Daily view: show Monday to Sunday of the selected week
+      const labels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+      const presentData = []
+      const absentData = []
+
+      // Get attendance data for each day of the week
+      for (let i = 0; i < 7; i++) {
+        const dateToCheck = new Date(weekStartDate)
+        dateToCheck.setDate(dateToCheck.getDate() + i)
+        
+        // Find schedule for this day
+        const daySchedule = weekSchedules.find((schedule: any) => {
+          const scheduleDate = new Date(schedule.date)
+          return scheduleDate.toDateString() === dateToCheck.toDateString()
+        })
+
+        if (daySchedule && daySchedule.branchAssignments) {
+          // Count actual attendance from the schedule
+          let present = 0
+          let absent = 0
+          daySchedule.branchAssignments.forEach((branch: any) => {
+            const employees = branch.employees || []
+            employees.forEach((emp: any) => {
+              if (emp.isPresent === true) {
+                present++
+              } else {
+                absent++
+              }
+            })
+          })
+          presentData.push(present)
+          absentData.push(absent)
+        } else {
+          // No schedule for this day
+          presentData.push(0)
+          absentData.push(0)
+        }
+      }
+
+      return {
+        labels,
+        datasets: [
+          {
+            label: "Present",
+            data: presentData,
+            backgroundColor: "rgba(34, 197, 94, 0.5)",
+            borderColor: "rgba(34, 197, 94, 1)",
+            borderWidth: 1,
+          },
+          {
+            label: "Absent",
+            data: absentData,
+            backgroundColor: "rgba(239, 68, 68, 0.5)",
+            borderColor: "rgba(239, 68, 68, 1)",
+            borderWidth: 1,
+          },
+        ],
+      }
+    }
+
+    // Weekly view: show 4 latest weeks (with or without attendance data)
+    if (timeRange === "week") {
+      // Build a map of weeks with their attendance data
+      const weeksMap = new Map<string, { label: string; present: number; absent: number; date: Date }>()
+
+      // Scan all schedules to find weeks with attendance
+      weekSchedules.forEach((schedule: any) => {
+        if (schedule && schedule.branchAssignments) {
+          const scheduleDate = new Date(schedule.date)
+          const weekStart = getWeekStart(scheduleDate)
+          const weekLabel = `Week ${format(weekStart, "w")} (${format(weekStart, "MMM d")})`
+          const weekKey = weekLabel
+
+          if (!weeksMap.has(weekKey)) {
+            weeksMap.set(weekKey, { label: weekLabel, present: 0, absent: 0, date: weekStart })
+          }
+
+          // Count attendance for this day
+          const weekData = weeksMap.get(weekKey)!
+          schedule.branchAssignments.forEach((branch: any) => {
+            const employees = branch.employees || []
+            employees.forEach((emp: any) => {
+              if (emp.isPresent === true) {
+                weekData.present++
+              } else {
+                weekData.absent++
+              }
+            })
+          })
+        }
+      })
+
+      // Generate 4 latest weeks (whether they have data or not)
+      const fourLatestWeeks = []
+      for (let i = 3; i >= 0; i--) {
+        const weekStart = new Date()
+        weekStart.setDate(weekStart.getDate() - i * 7)
+        const weekStartDate = getWeekStart(weekStart)
+        const weekLabel = `Week ${format(weekStartDate, "w")} (${format(weekStartDate, "MMM d")})`
+        fourLatestWeeks.push({ label: weekLabel, date: weekStartDate })
+      }
+
+      // Map attendance data to the 4 latest weeks
+      const labels: string[] = []
+      const presentData: number[] = []
+      const absentData: number[] = []
+
+      fourLatestWeeks.forEach((week) => {
+        labels.push(week.label)
+        
+        // Find matching week in weeksMap
+        const matchingWeek = Array.from(weeksMap.values()).find(
+          (w) => w.date.toDateString() === week.date.toDateString()
+        )
+
+        if (matchingWeek) {
+          presentData.push(matchingWeek.present)
+          absentData.push(matchingWeek.absent)
+        } else {
+          // No data for this week
+          presentData.push(0)
+          absentData.push(0)
+        }
+      })
+
+      return {
+        labels,
+        datasets: [
+          {
+            label: "Present",
+            data: presentData,
+            backgroundColor: "rgba(34, 197, 94, 0.5)",
+            borderColor: "rgba(34, 197, 94, 1)",
+            borderWidth: 1,
+          },
+          {
+            label: "Absent",
+            data: absentData,
+            backgroundColor: "rgba(239, 68, 68, 0.5)",
+            borderColor: "rgba(239, 68, 68, 1)",
+            borderWidth: 1,
+          },
+        ],
+      }
+    }
+
+    // Monthly view: aggregate real data from schedules for all months (January to December)
+    const monthLabels = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+    const monthPresentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    const monthAbsentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    // Aggregate attendance data from all schedules grouped by month
+    weekSchedules.forEach((schedule: any) => {
+      if (schedule && schedule.branchAssignments && schedule.date) {
+        const scheduleDate = new Date(schedule.date)
+        const monthIndex = scheduleDate.getMonth() // 0-11
+
+        schedule.branchAssignments.forEach((branch: any) => {
+          const employees = branch.employees || []
+          employees.forEach((emp: any) => {
+            if (emp.isPresent === true) {
+              monthPresentData[monthIndex]++
+            } else {
+              monthAbsentData[monthIndex]++
+            }
+          })
+        })
+      }
+    })
+
+    return {
+      labels: monthLabels,
+      datasets: [
+        {
           label: "Present",
-          data: presentData,
+          data: monthPresentData,
           backgroundColor: "rgba(34, 197, 94, 0.5)",
           borderColor: "rgba(34, 197, 94, 1)",
           borderWidth: 1,
         },
         {
           label: "Absent",
-          data: absentData,
+          data: monthAbsentData,
           backgroundColor: "rgba(239, 68, 68, 0.5)",
           borderColor: "rgba(239, 68, 68, 1)",
           borderWidth: 1,
         },
       ],
     }
-  }, [crews.length, timeRange])
+  }, [crews.length, timeRange, weekSchedules, weekStartDate])
 
   // Generate restaurant deployment data
   const restaurantDeploymentData = useMemo(() => {
@@ -291,15 +677,129 @@ export default function ReportsPage() {
       }
     }
   }, [branches, selectedBranch, crews])
+  
+  // Generate leave trend data
+  const leaveTrendData = useMemo(() => {
+    const crewsForReport = crewsWithSampleLeaves
 
-  // Quick date selection buttons
-  const handleQuickDateSelect = (days: number) => {
-    const date = subDays(new Date(), days)
-    setSelectedDate(date)
+    if (leavePeriod === "monthly") {
+      const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+      const leaveCounts = new Array(12).fill(0)
+
+      // Calculate leave data for each month
+      crewsForReport.forEach((crew: any) => {
+        const leaveRequests = crew.leaveRequests || []
+        leaveRequests.forEach((leave: any) => {
+          if (leave.status === "approved") {
+            const leaveDate = new Date(leave.startDate)
+            leaveCounts[leaveDate.getMonth()]++
+          }
+        })
+      })
+
+      return {
+        labels: monthLabels,
+        datasets: [
+          {
+            label: "Approved Leaves",
+            data: leaveCounts,
+            backgroundColor: "rgba(59, 130, 246, 0.7)",
+            borderColor: "rgba(59, 130, 246, 1)",
+            borderWidth: 1,
+          },
+        ],
+      }
+    } else if (leavePeriod === "weekly") {
+      const weekLabels = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"]
+      const leaveCounts = new Array(5).fill(0)
+
+      crewsForReport.forEach((crew: any) => {
+        const leaveRequests = crew.leaveRequests || []
+        leaveRequests.forEach((leave: any) => {
+          if (leave.status === "approved") {
+            const leaveDate = new Date(leave.startDate)
+            const week = Math.floor(leaveDate.getDate() / 7)
+            if (week < 5) leaveCounts[week]++
+          }
+        })
+      })
+
+      return {
+        labels: weekLabels,
+        datasets: [
+          {
+            label: "Approved Leaves",
+            data: leaveCounts,
+            backgroundColor: "rgba(34, 197, 94, 0.7)",
+            borderColor: "rgba(34, 197, 94, 1)",
+            borderWidth: 1,
+          },
+        ],
+      }
+    } else {
+      const yearLabels = ["2022", "2023", "2024", "2025"]
+      const leaveCounts = new Array(4).fill(0)
+
+      crewsForReport.forEach((crew: any) => {
+        const leaveRequests = crew.leaveRequests || []
+        leaveRequests.forEach((leave: any) => {
+          if (leave.status === "approved") {
+            const leaveDate = new Date(leave.startDate)
+            const year = leaveDate.getFullYear()
+            const yearIndex = year - 2022
+            if (yearIndex >= 0 && yearIndex < 4) leaveCounts[yearIndex]++
+          }
+        })
+      })
+
+      return {
+        labels: yearLabels,
+        datasets: [
+          {
+            label: "Approved Leaves",
+            data: leaveCounts,
+            backgroundColor: "rgba(168, 85, 247, 0.7)",
+            borderColor: "rgba(168, 85, 247, 1)",
+            borderWidth: 1,
+          },
+        ],
+      }
+    }
+  }, [crewsWithSampleLeaves, leavePeriod])
+
+  // Generate leave summary statistics
+  const leaveSummary = useMemo(() => {
+    const crewsForReport = crewsWithSampleLeaves
+    let totalApproved = 0
+    let totalPending = 0
+    let totalRejected = 0
+
+    crewsForReport.forEach((crew: any) => {
+      const leaveRequests = crew.leaveRequests || []
+      leaveRequests.forEach((leave: any) => {
+        if (leave.status === "approved") totalApproved++
+        else if (leave.status === "pending") totalPending++
+        else if (leave.status === "rejected") totalRejected++
+      })
+    })
+
+    return { totalApproved, totalPending, totalRejected }
+  }, [crewsWithSampleLeaves])
+
+  // Quick week selection buttons
+  const handleQuickWeekSelect = (weeks: number) => {
+    const newDate = new Date()
+    newDate.setDate(newDate.getDate() - weeks * 7)
+    setWeekStartDate(getWeekStart(newDate))
   }
 
-  // Check if the selected date is today
-  const isSelectedDateToday = isToday(selectedDate)
+  // Check if the selected week contains today
+  const isCurrentWeek = (() => {
+    const today = new Date()
+    const weekEnd = new Date(weekStartDate)
+    weekEnd.setDate(weekEnd.getDate() + 6)
+    return today >= weekStartDate && today <= weekEnd
+  })()
 
   return (
     <div className="space-y-8">
@@ -309,55 +809,15 @@ export default function ReportsPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="attendance">Attendance Report</TabsTrigger>
           <TabsTrigger value="allocation">Crew Allocation Summary</TabsTrigger>
           <TabsTrigger value="deployment">Restaurant Deployment</TabsTrigger>
+          <TabsTrigger value="leaves">Leave Reports</TabsTrigger>
         </TabsList>
 
         {/* Attendance Report Tab */}
         <TabsContent value="attendance" className="space-y-6 mt-6">
-          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant={isToday(selectedDate) ? "default" : "outline"}
-                size="sm"
-                onClick={() => handleQuickDateSelect(0)}
-              >
-                Today
-              </Button>
-              <Button
-                variant={
-                  isBefore(startOfDay(selectedDate), startOfDay(new Date())) &&
-                  isBefore(startOfDay(subDays(new Date(), 1)), startOfDay(selectedDate))
-                    ? "default"
-                    : "outline"
-                }
-                size="sm"
-                onClick={() => handleQuickDateSelect(1)}
-              >
-                Yesterday
-              </Button>
-              <Button
-                variant={
-                  isBefore(startOfDay(selectedDate), startOfDay(subDays(new Date(), 1))) &&
-                  isBefore(startOfDay(subDays(new Date(), 7)), startOfDay(selectedDate))
-                    ? "default"
-                    : "outline"
-                }
-                size="sm"
-                onClick={() => handleQuickDateSelect(7)}
-              >
-                Last Week
-              </Button>
-            </div>
-
-            <div className="flex-1 min-w-[280px] max-w-xs">
-              <div className="text-sm font-medium mb-1.5 text-muted-foreground">Select Date:</div>
-              <BasicDatePicker date={selectedDate} setDate={setSelectedDate} className="w-full" />
-            </div>
-          </div>
-
           {/* Attendance Trend Chart */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -400,11 +860,11 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
 
-          {/* Overall attendance summary for selected date */}
+          {/* Overall attendance summary for selected week */}
           <div className="bg-muted/30 rounded-lg p-4">
             <h3 className="text-lg font-medium mb-2 flex items-center">
-              Attendance Summary for {format(selectedDate, "EEEE, MMMM d, yyyy")}
-              {isSelectedDateToday && <Badge className="ml-2 bg-blue-500 text-white">Current Day</Badge>}
+              Attendance Summary for Week of {format(weekStartDate, "MMMM d, yyyy")}
+              {isCurrentWeek && <Badge className="ml-2 bg-blue-500 text-white">Current Week</Badge>}
             </h3>
             <div className="flex flex-col sm:flex-row sm:items-center gap-4">
               <div className="flex items-center gap-2">
@@ -428,16 +888,16 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            {isSelectedDateToday && (
+            {isCurrentWeek && (
               <div className="mt-2 text-sm text-blue-600 dark:text-blue-400">
-                Note: Today's attendance reflects the current status from the dashboard.
+                Note: This week's attendance reflects the current status from the dashboard.
               </div>
             )}
           </div>
 
           {/* Branch-wise attendance logs */}
           <div className="space-y-6">
-            {attendanceHistory.map((branch) => (
+            {attendanceHistory.map((branch: any) => (
               <div key={branch.branchName} className="border rounded-lg overflow-hidden">
                 <div className="bg-muted/50 p-3 flex justify-between items-center">
                   <h3 className="font-medium">{branch.branchName}</h3>
@@ -454,33 +914,36 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                <div className="divide-y">
-                  {branch.employees.map((employee) => (
-                    <div
-                      key={employee.id}
-                      className={`p-3 flex justify-between items-center ${
-                        employee.wasPresent ? "bg-green-50 dark:bg-green-950/20" : "bg-red-50 dark:bg-red-950/20"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {employee.wasPresent ? (
-                          <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
-                        ) : (
-                          <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
-                        )}
-                        <div>
-                          <div className="font-medium">
-                            {employee.firstName} {employee.surname}
-                          </div>
-                          <div className="text-xs text-muted-foreground">{employee.type}</div>
-                        </div>
-                      </div>
-
-                      <Badge variant={employee.wasPresent ? "default" : "destructive"}>
-                        {employee.wasPresent ? "Present" : "Absent"}
-                      </Badge>
-                    </div>
-                  ))}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-muted/50 border-b">
+                      <tr>
+                        <th className="text-left px-4 py-2 font-medium text-sm">Name</th>
+                        <th className="text-left px-4 py-2 font-medium text-sm">Days Present</th>
+                        <th className="text-left px-4 py-2 font-medium text-sm">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {branch.employees.map((employee: any) => (
+                        <tr
+                          key={employee.id}
+                          className={employee.wasPresent ? "bg-green-50 dark:bg-green-950/20" : "bg-red-50 dark:bg-red-950/20"}
+                        >
+                          <td className="px-4 py-3">
+                            <div className="font-medium">{employee.firstName} {employee.surname}</div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">
+                            {employee.presentDays || 0}/{employee.totalDays || 7}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge variant={employee.wasPresent ? "default" : "destructive"}>
+                              {employee.wasPresent ? "Present" : "Absent"}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             ))}
@@ -516,7 +979,7 @@ export default function ReportsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {branches.length > 0 && branchCounts.some((count) => count > 0) ? (
+                {crewAllocationByBranch.length > 0 && crewAllocationByBranch.some((alloc: any) => alloc.total > 0) ? (
                   <ChartContainer className="h-[300px]">
                     <Chart type="pie" data={branchDistributionData} options={chartOptions} className="max-w-full" />
                   </ChartContainer>
@@ -572,33 +1035,26 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody className="bg-card divide-y divide-gray-200">
-                    {branches.map((branch) => {
-                      const branchCrews = getCrewsForBranch(branch.id)
-                      const fullTimeCount = branchCrews.filter((c) => c.type === "full-time").length
-                      const partTimeCount = branchCrews.filter((c) => c.type === "part-time").length
-                      const totalCount = branchCrews.length
-                      const presentCount = branchCrews.filter((c) => c.isPresent).length
-                      const attendanceRate = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
-
+                    {crewAllocationByBranch.map((allocation: any) => {
                       return (
-                        <tr key={branch.id}>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{branch.branchName}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{fullTimeCount}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{partTimeCount}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{totalCount}</td>
+                        <tr key={allocation.branchName}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{allocation.branchName}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.fullTime}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.partTime}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.total}</td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
                             <div className="flex items-center">
-                              <span className="mr-2">{attendanceRate}%</span>
+                              <span className="mr-2">{allocation.attendanceRate}%</span>
                               <div className="w-24 bg-muted rounded-full h-2">
                                 <div
                                   className={`h-2 rounded-full ${
-                                    attendanceRate >= 75
+                                    allocation.attendanceRate >= 75
                                       ? "bg-green-500"
-                                      : attendanceRate >= 50
+                                      : allocation.attendanceRate >= 50
                                         ? "bg-amber-500"
                                         : "bg-red-500"
                                   }`}
-                                  style={{ width: `${attendanceRate}%` }}
+                                  style={{ width: `${allocation.attendanceRate}%` }}
                                 ></div>
                               </div>
                             </div>
@@ -750,6 +1206,131 @@ export default function ReportsPage() {
               </CardContent>
             </Card>
           )}
+        </TabsContent>
+
+        {/* Leave Reports Tab */}
+        <TabsContent value="leaves" className="space-y-6 mt-6">
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+            <h2 className="text-xl font-semibold">Leave Trend Analysis</h2>
+            <Select
+              value={leavePeriod}
+              onValueChange={(value: "weekly" | "monthly" | "annually") => setLeavePeriod(value)}
+            >
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Select period" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="weekly">Weekly</SelectItem>
+                <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="annually">Annually</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Leave Summary Stats */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Approved Leaves</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{leaveSummary.totalApproved}</div>
+                <p className="text-xs text-muted-foreground mt-1">Total approved this period</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Pending Requests</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-amber-600">{leaveSummary.totalPending}</div>
+                <p className="text-xs text-muted-foreground mt-1">Awaiting approval</p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Rejected</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{leaveSummary.totalRejected}</div>
+                <p className="text-xs text-muted-foreground mt-1">Declined requests</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Leave Trend Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center">
+                <Calendar className="h-5 w-5 mr-2" />
+                Leave Trend Chart
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ChartContainer className="h-[350px]">
+                <Chart
+                  type="bar"
+                  data={leaveTrendData}
+                  options={{
+                    responsive: true,
+                    scales: {
+                      y: {
+                        beginAtZero: true,
+                      },
+                    },
+                    plugins: {
+                      legend: {
+                        position: "top" as const,
+                      },
+                      tooltip: {
+                        callbacks: {
+                          label: (context: any) => {
+                            return `${context.dataset.label}: ${context.parsed.y} leaves`
+                          },
+                        },
+                      },
+                    },
+                  }}
+                />
+              </ChartContainer>
+            </CardContent>
+          </Card>
+
+          {/* Leave Distribution Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Leave Distribution Overview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-950/20 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-green-600">✓</Badge>
+                    <span className="font-medium">Approved Leaves</span>
+                  </div>
+                  <span className="text-2xl font-bold text-green-600">{leaveSummary.totalApproved}</span>
+                </div>
+
+                <div className="flex items-center justify-between p-3 bg-amber-50 dark:bg-amber-950/20 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-amber-600">!</Badge>
+                    <span className="font-medium">Pending Requests</span>
+                  </div>
+                  <span className="text-2xl font-bold text-amber-600">{leaveSummary.totalPending}</span>
+                </div>
+
+                <div className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-red-600">✕</Badge>
+                    <span className="font-medium">Rejected Leaves</span>
+                  </div>
+                  <span className="text-2xl font-bold text-red-600">{leaveSummary.totalRejected}</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>
