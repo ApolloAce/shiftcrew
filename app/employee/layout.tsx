@@ -95,7 +95,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
               <item.icon className="h-4 w-4" />
             </span>
             <span>{item.name}</span>
-            {item.badge > 0 && <Badge className="ml-auto bg-red-500 text-white">{item.badge}</Badge>}
+            {(item.badge ?? 0) > 0 && <Badge className="ml-auto bg-red-500 text-white">{item.badge}</Badge>}
           </div>
         </Button>
       ))}

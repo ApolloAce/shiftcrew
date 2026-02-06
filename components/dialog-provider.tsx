@@ -19,7 +19,7 @@ type DialogContextType = {
   closeDialog: () => void
   openConfirmDialog: (options: {
     title: string
-    description: string
+    description: ReactNode
     confirmLabel?: string
     cancelLabel?: string
     confirmVariant?: string
@@ -41,7 +41,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [confirmOptions, setConfirmOptions] = useState<{
     title: string
-    description: string
+    description: ReactNode
     confirmLabel?: string
     cancelLabel?: string
     confirmVariant?: string
@@ -81,7 +81,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const openConfirmDialog = useCallback(
     (options: {
       title: string
-      description: string
+      description: ReactNode
       confirmLabel?: string
       cancelLabel?: string
       confirmVariant?: string

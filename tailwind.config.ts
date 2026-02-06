@@ -57,26 +57,18 @@ const config = {
         accent: {
           DEFAULT: "hsl(var(--accent))",
           foreground: "hsl(var(--accent-foreground))",
-          DEFAULT: "#6396B0",
-          foreground: "#F7F4E9",
         },
         destructive: {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
-          DEFAULT: "#B04E4E",
-          foreground: "#F7F4E9",
         },
         muted: {
           DEFAULT: "hsl(var(--muted))",
           foreground: "hsl(var(--muted-foreground))",
-          DEFAULT: "#EFF5F8",
-          foreground: "#3E6272",
         },
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
-          DEFAULT: "#FFFFFF",
-          foreground: "#2F4A55",
         },
       },
       borderRadius: {

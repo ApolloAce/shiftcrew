@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { format, subDays, isWeekend, isToday, isBefore, startOfDay, subMonths } from "date-fns"
 import { BasicDatePicker } from "@/components/ui/basic-date-picker"
+import { getAllLeaveRequests } from "@/lib/firestore-leave-service"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
@@ -25,7 +26,6 @@ export default function ReportsPage() {
     return new Date(today.setDate(diff))
   })
   const [activeTab, setActiveTab] = useState("attendance")
-  const [selectedBranch, setSelectedBranch] = useState<string>("all")
   const [timeRange, setTimeRange] = useState<"day" | "week" | "month">("week")
   const [leavePeriod, setLeavePeriod] = useState<"weekly" | "monthly" | "annually">("monthly")
   const [weekSchedules, setWeekSchedules] = useState<any[]>([])
@@ -179,6 +179,24 @@ export default function ReportsPage() {
       ],
     }))
   }, [crews])
+
+  // Firestore leave requests state
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([])
+
+  // Fetch leave requests from Firestore
+  useEffect(() => {
+    const fetchLeaves = async () => {
+      try {
+        const leaves = await getAllLeaveRequests()
+        console.log('Reports: fetched leave requests', leaves.length)
+        setLeaveRequests(leaves)
+      } catch (error) {
+        console.error('Error fetching leave requests:', error)
+        setLeaveRequests([])
+      }
+    }
+    fetchLeaves()
+  }, [])
 
   // Helper function to get employees for a branch
   const getCrewsForBranch = (branchId: string | number) => {
@@ -645,56 +663,35 @@ export default function ReportsPage() {
 
   // Generate restaurant deployment data
   const restaurantDeploymentData = useMemo(() => {
-    if (selectedBranch === "all") {
-      return {
-        labels: branches.map((b) => b.branchName),
-        datasets: [
-          {
-            label: "Assigned Employees",
-            data: branches.map((branch) => getCrewsForBranch(branch.id).length),
-            backgroundColor: "rgba(139, 92, 246, 0.5)",
-            borderColor: "rgba(139, 92, 246, 1)",
-            borderWidth: 1,
-          },
-        ],
-      }
-    } else {
-      const branch = branches.find((b) => String(b.id) === selectedBranch)
-      if (!branch) return { labels: [], datasets: [] }
+    // Use crew allocation computed from schedules
+    const labels = crewAllocationByBranch.map((c) => c.branchName)
+    const data = crewAllocationByBranch.map((c) => c.total)
 
-      const crewMembers = getCrewsForBranch(branch.id)
-      return {
-        labels: crewMembers.map((c) => `${c.firstName} ${c.surname}`),
-        datasets: [
-          {
-            label: "Shifts Assigned",
-            data: crewMembers.map(() => Math.floor(Math.random() * 20) + 5),
-            backgroundColor: "rgba(59, 130, 246, 0.5)",
-            borderColor: "rgba(59, 130, 246, 1)",
-            borderWidth: 1,
-          },
-        ],
-      }
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Assigned Employees",
+          data,
+          backgroundColor: "rgba(139, 92, 246, 0.5)",
+          borderColor: "rgba(139, 92, 246, 1)",
+          borderWidth: 1,
+        },
+      ],
     }
-  }, [branches, selectedBranch, crews])
+  }, [crewAllocationByBranch])
   
   // Generate leave trend data
   const leaveTrendData = useMemo(() => {
-    const crewsForReport = crewsWithSampleLeaves
+    const approvedLeaves = leaveRequests.filter((l: any) => l.status === "approved")
 
     if (leavePeriod === "monthly") {
       const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
       const leaveCounts = new Array(12).fill(0)
 
-      // Calculate leave data for each month
-      crewsForReport.forEach((crew: any) => {
-        const leaveRequests = crew.leaveRequests || []
-        leaveRequests.forEach((leave: any) => {
-          if (leave.status === "approved") {
-            const leaveDate = new Date(leave.startDate)
-            leaveCounts[leaveDate.getMonth()]++
-          }
-        })
+      approvedLeaves.forEach((leave: any) => {
+        const leaveDate = new Date(leave.startDate)
+        if (!isNaN(leaveDate.getTime())) leaveCounts[leaveDate.getMonth()]++
       })
 
       return {
@@ -713,15 +710,12 @@ export default function ReportsPage() {
       const weekLabels = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"]
       const leaveCounts = new Array(5).fill(0)
 
-      crewsForReport.forEach((crew: any) => {
-        const leaveRequests = crew.leaveRequests || []
-        leaveRequests.forEach((leave: any) => {
-          if (leave.status === "approved") {
-            const leaveDate = new Date(leave.startDate)
-            const week = Math.floor(leaveDate.getDate() / 7)
-            if (week < 5) leaveCounts[week]++
-          }
-        })
+      approvedLeaves.forEach((leave: any) => {
+        const leaveDate = new Date(leave.startDate)
+        if (!isNaN(leaveDate.getTime())) {
+          const week = Math.floor((leaveDate.getDate() - 1) / 7) // 0-based
+          if (week >= 0 && week < 5) leaveCounts[week]++
+        }
       })
 
       return {
@@ -737,19 +731,17 @@ export default function ReportsPage() {
         ],
       }
     } else {
-      const yearLabels = ["2022", "2023", "2024", "2025"]
+      // Yearly summary for last 4 years
+      const currentYear = new Date().getFullYear()
+      const yearLabels = [currentYear - 3, currentYear - 2, currentYear - 1, currentYear].map(String)
       const leaveCounts = new Array(4).fill(0)
 
-      crewsForReport.forEach((crew: any) => {
-        const leaveRequests = crew.leaveRequests || []
-        leaveRequests.forEach((leave: any) => {
-          if (leave.status === "approved") {
-            const leaveDate = new Date(leave.startDate)
-            const year = leaveDate.getFullYear()
-            const yearIndex = year - 2022
-            if (yearIndex >= 0 && yearIndex < 4) leaveCounts[yearIndex]++
-          }
-        })
+      approvedLeaves.forEach((leave: any) => {
+        const leaveDate = new Date(leave.startDate)
+        if (!isNaN(leaveDate.getTime())) {
+          const idx = leaveDate.getFullYear() - (currentYear - 3)
+          if (idx >= 0 && idx < 4) leaveCounts[idx]++
+        }
       })
 
       return {
@@ -765,26 +757,22 @@ export default function ReportsPage() {
         ],
       }
     }
-  }, [crewsWithSampleLeaves, leavePeriod])
+  }, [leaveRequests, leavePeriod])
 
   // Generate leave summary statistics
   const leaveSummary = useMemo(() => {
-    const crewsForReport = crewsWithSampleLeaves
     let totalApproved = 0
     let totalPending = 0
     let totalRejected = 0
 
-    crewsForReport.forEach((crew: any) => {
-      const leaveRequests = crew.leaveRequests || []
-      leaveRequests.forEach((leave: any) => {
-        if (leave.status === "approved") totalApproved++
-        else if (leave.status === "pending") totalPending++
-        else if (leave.status === "rejected") totalRejected++
-      })
+    leaveRequests.forEach((leave: any) => {
+      if (leave.status === "approved") totalApproved++
+      else if (leave.status === "pending") totalPending++
+      else if (leave.status === "rejected") totalRejected++
     })
 
     return { totalApproved, totalPending, totalRejected }
-  }, [crewsWithSampleLeaves])
+  }, [leaveRequests])
 
   // Quick week selection buttons
   const handleQuickWeekSelect = (weeks: number) => {
@@ -1073,28 +1061,18 @@ export default function ReportsPage() {
         <TabsContent value="deployment" className="space-y-6 mt-6">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold">Restaurant Deployment Record</h2>
-            <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select branch" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Branches</SelectItem>
-                {branches.map((branch) => (
-                  <SelectItem key={branch.id} value={branch.id.toString()}>
-                    {branch.branchName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center">
-                <BarChart2 className="h-5 w-5 mr-2" />
-                {selectedBranch === "all"
-                  ? "Branch Deployment Overview"
-                  : `Deployment for ${branches.find((b) => b.id.toString() === selectedBranch)?.branchName}`}
+              <CardTitle className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-2">
+                  <BarChart2 className="h-5 w-5 mr-2" />
+                  Branch Deployment Overview
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Total Scheduled: {crewAllocationByBranch.reduce((s, a) => s + a.total, 0)}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -1120,92 +1098,7 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
 
-          {/* Detailed Deployment Table */}
-          {selectedBranch !== "all" && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Detailed Deployment Record</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="rounded-md border overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th
-                          scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                        >
-                          Employee
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                        >
-                          Type
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                        >
-                          Shifts Assigned
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                        >
-                          Attendance Rate
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                        >
-                          Status
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-card divide-y divide-gray-200">
-                      {getCrewsForBranch(selectedBranch === "all" ? "" : selectedBranch).map((crew) => {
-                        // Simulate attendance rate
-                        const attendanceRate = Math.floor(Math.random() * 30) + 70
-
-                        return (
-                          <tr key={crew.id}>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                              {crew.firstName} {crew.surname}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">{crew.type || "Employee"}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">{Math.floor(Math.random() * 20) + 5}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              <div className="flex items-center">
-                                <span className="mr-2">{attendanceRate}%</span>
-                                <div className="w-24 bg-muted rounded-full h-2">
-                                  <div
-                                    className={`h-2 rounded-full ${
-                                      attendanceRate >= 75
-                                        ? "bg-green-500"
-                                        : attendanceRate >= 50
-                                          ? "bg-amber-500"
-                                          : "bg-red-500"
-                                    }`}
-                                    style={{ width: `${attendanceRate}%` }}
-                                  ></div>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              <Badge variant={attendanceRate >= 75 ? "default" : "outline"}>
-                                {attendanceRate >= 75 ? "Good" : "Fair"}
-                              </Badge>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Detailed per-branch deployment removed — showing overview across all branches */}
         </TabsContent>
 
         {/* Leave Reports Tab */}

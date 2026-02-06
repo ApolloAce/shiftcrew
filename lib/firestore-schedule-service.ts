@@ -30,9 +30,12 @@ export type Schedule = {
   id?: string
   date: string
   time: string
+  scheduleFor?: string // Explicit date this schedule is for (YYYY-MM-DD)
   branchNames?: string[] // Array of branch names included in this schedule (deprecated)
   assignments?: ScheduleAssignment[] // Legacy flat array (deprecated, kept for backward compatibility)
   branchAssignments?: BranchAssignment[] // New organized structure: employees grouped by branch
+  weekStart?: string
+  weekEnd?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -79,7 +82,18 @@ export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | 
       // ignore
     }
     // Find existing schedules for the same date
-    const q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", schedule.date))
+    // If scheduleFor is provided (new format), query by both date and scheduleFor to uniquely identify each day
+    // Otherwise, fall back to querying by date only (legacy behavior)
+    let q
+    if ((schedule as any).scheduleFor) {
+      q = query(
+        collection(db, SCHEDULES_COLLECTION),
+        where("date", "==", schedule.date),
+        where("scheduleFor", "==", (schedule as any).scheduleFor)
+      )
+    } else {
+      q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", schedule.date))
+    }
     const snap = await getDocs(q)
 
     // Group assignments by branch for organized storage
@@ -89,11 +103,16 @@ export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | 
 
     // Build the schedule data with organized branch assignments
     // Exclude branchNames and flat assignments from saved data
-    const scheduleData = {
+    const scheduleData: any = {
       date: schedule.date,
       time: schedule.time,
       branchAssignments, // Employees grouped by branch
     }
+
+    // Include optional week range metadata if provided (weekStart/weekEnd/scheduleFor)
+    if ((schedule as any).weekStart) scheduleData.weekStart = (schedule as any).weekStart
+    if ((schedule as any).weekEnd) scheduleData.weekEnd = (schedule as any).weekEnd
+    if ((schedule as any).scheduleFor) scheduleData.scheduleFor = (schedule as any).scheduleFor
 
     if (!snap.empty) {
       console.log(`Found existing schedules for date=${schedule.date}, count=${snap.docs.length}`)
@@ -157,6 +176,43 @@ export const updateScheduleAssignments = async (scheduleId: string, assignments:
     console.log(`✓ Schedule ${scheduleId} updated`)
   } catch (error) {
     console.error("❌ Error updating schedule:", error)
+    throw error
+  }
+}
+
+// Delete all schedules for a given week (by weekStart and individual dates)
+export const deleteSchedulesForWeek = async (weekStart: string): Promise<void> => {
+  try {
+    // First, delete by weekStart (for newly saved schedules)
+    let q = query(collection(db, SCHEDULES_COLLECTION), where("weekStart", "==", weekStart))
+    let snap = await getDocs(q)
+    
+    for (const doc_snap of snap.docs) {
+      await deleteDoc(doc(db, SCHEDULES_COLLECTION, doc_snap.id))
+    }
+    
+    console.log(`✓ Deleted ${snap.docs.length} schedules by weekStart for week starting ${weekStart}`)
+
+    // Also delete by each individual date in the week (to catch old schedules without weekStart field)
+    const startDate = new Date(weekStart + "T00:00:00")
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(startDate)
+      d.setDate(startDate.getDate() + i)
+      const iso = d.toISOString().split("T")[0]
+      
+      q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", iso))
+      snap = await getDocs(q)
+      
+      for (const doc_snap of snap.docs) {
+        await deleteDoc(doc(db, SCHEDULES_COLLECTION, doc_snap.id))
+      }
+      
+      if (snap.docs.length > 0) {
+        console.log(`✓ Deleted ${snap.docs.length} schedules for date ${iso}`)
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error deleting schedules for week:", error)
     throw error
   }
 }
