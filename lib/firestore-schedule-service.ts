@@ -36,6 +36,7 @@ export type Schedule = {
   branchAssignments?: BranchAssignment[] // New organized structure: employees grouped by branch
   weekStart?: string
   weekEnd?: string
+  manuallyScheduled?: boolean // Flag to indicate this was manually scheduled (not from auto-rotation)
   createdAt?: string
   updatedAt?: string
 }

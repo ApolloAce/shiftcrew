@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { collection, getDocs, query, where, deleteDoc, doc } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -76,9 +78,6 @@ export default function SchedulingPage() {
     monday.setDate(today.getDate() - currentDay + (currentDay === 0 ? -6 : 1))
     return monday.toISOString().split("T")[0]
   })
-  const [showSaveModal, setShowSaveModal] = useState(false)
-  const [scheduleDate, setScheduleDate] = useState("")
-  const [scheduleTime, setScheduleTime] = useState("")
   const [appliedScheduleWeek, setAppliedScheduleWeek] = useState<{ weekStart?: string; weekEnd?: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedBranchForDisplay, setSelectedBranchForDisplay] = useState<string | null>(null)
@@ -625,30 +624,23 @@ export default function SchedulingPage() {
     }
   }
 
-  const handleSaveSchedule = () => {
-    setScheduleDate(selectedDate)
-    setScheduleTime(new Date().toTimeString().slice(0, 5))
-    setShowSaveModal(true)
-  }
-
-  const handleSchedulePost = async () => {
-    if (!scheduleDate || !scheduleTime) {
-      showNotification("error", "Validation Error", "Date and time are required")
+  const handleSaveSchedule = async () => {
+    if (!selectedDate) {
+      showNotification("error", "Validation Error", "Please select a date")
       return
     }
 
-    console.log("Schedule posted for:", scheduleDate, scheduleTime)
-
     try {
+      console.log("[Manual Schedule] Saving schedule for date:", selectedDate)
+
       // Build complete assignments array (rotated + manual)
       const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
 
-      // Add rotated employees
+      // Add rotated employees if any
       if (rotatedEmployees && rotatedEmployees.length > 0) {
         for (const emp of rotatedEmployees) {
           const fireBranch = fireBranches.find((fb: any) => fb.branchName === emp.nextWeekBranch || fb.name === emp.nextWeekBranch)
 
-          // try to match crew by email first, then by name
           let fireCrew = null
           if ((emp as any).email) {
             fireCrew = fireEmployees.find((fe: any) => (fe.email || "").toLowerCase() === ((emp as any).email || "").toLowerCase())
@@ -694,115 +686,79 @@ export default function SchedulingPage() {
               shift: "AM",
             })
           }
-          
+
           // Save as manual override in separate collection
           try {
-            const dayOfWeek = new Date(scheduleDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long" })
+            const dayOfWeek = new Date(selectedDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long" })
             await saveManualOverride({
               employeeId: String(employee.id),
               employeeName,
-              date: scheduleDate,
+              date: selectedDate,
               dayOfWeek,
               overrideBranchId: String(branch.id),
               overrideBranchName: branch.branchName || branch.name,
               shift: "AM",
               reason: "Manual override for schedule",
             })
-            console.log(`✓ Manual override saved for ${employeeName} on ${scheduleDate}`)
+            console.log(`✓ Manual override saved for ${employeeName} on ${selectedDate}`)
           } catch (err) {
             console.error("Error saving manual override:", err)
-            // Don't fail the entire save if override saving fails
           }
         }
       }
 
-      // Build branch assignments - include ALL branches, even those without employees
-      const branchAssignments = fireBranches.map((branch) => {
-        const branchEmployees = allAssignments.filter((a) => String(a.branchId) === String(branch.id))
-        return {
-          branchId: String(branch.id),
-          branchName: branch.branchName,
-          employees: branchEmployees,
-        }
-      })
-
-      // Save as 7 schedule documents (one per day of the week, starting from selected date's Monday)
-      if (fireBranches.length > 0) {
+      // Save single document for the selected date (not the entire week)
+      if (allAssignments.length > 0) {
         try {
-          console.log("Saving schedule posts to Firestore (allAssignments):", allAssignments.length)
-          // compute week start (Monday) and end (Sunday) for the provided scheduleDate
-          const sd = new Date(scheduleDate + "T00:00:00")
-          const sdDay = sd.getDay()
-          const weekStartDate = new Date(sd)
-          weekStartDate.setDate(sd.getDate() - sdDay + (sdDay === 0 ? -6 : 1))
-          const weekEndDate = new Date(weekStartDate)
-          weekEndDate.setDate(weekStartDate.getDate() + 6)
+          console.log("[Manual Schedule] Saving schedule for date:", selectedDate, "with", allAssignments.length, "assignments")
 
-          const weekStartISO = weekStartDate.toISOString().split("T")[0]
-          const weekEndISO = weekEndDate.toISOString().split("T")[0]
-
-          // Delete any existing schedules for this week
+          // Delete any existing schedule for just this date
           try {
-            await deleteSchedulesForWeek(weekStartISO)
-          } catch (err) {
-            console.warn("Could not delete existing schedules for week:", err)
-          }
-
-          // Save 7 schedule documents (one per day of the week)
-          const savedDates: string[] = []
-          for (let i = 0; i < 7; i++) {
-            const d = new Date(weekStartDate)
-            d.setDate(weekStartDate.getDate() + i)
-            const dayISO = d.toISOString().split("T")[0]
-
-            try {
-              await addScheduleToFirestore({
-                date: weekStartISO, // Save date is Monday of the week
-                scheduleFor: dayISO, // Specific date this schedule is for
-                time: scheduleTime,
-                weekStart: weekStartISO,
-                weekEnd: weekEndISO,
-                assignments: allAssignments.map((a) => ({
-                  employeeId: a.employeeId,
-                  employeeName: a.employeeName,
-                  branchId: a.branchId,
-                  branchName: a.branchName,
-                  isPresent: true, // Default to present; can be updated later
-                  shift: a.shift,
-                })),
-              })
-              savedDates.push(dayISO)
-            } catch (e) {
-              console.warn("Failed to save schedule for", dayISO, e)
+            const scheduleQuery = query(
+              collection(db, "schedules"),
+              where("scheduleFor", "==", selectedDate)
+            )
+            const snapshots = await getDocs(scheduleQuery)
+            for (const docSnap of snapshots.docs) {
+              await deleteDoc(doc(db, "schedules", docSnap.id))
+              console.log("[Manual Schedule] Deleted existing schedule for", selectedDate)
             }
+          } catch (err) {
+            console.warn("[Manual Schedule] Could not delete existing schedule for date:", err)
           }
 
-          if (savedDates.length > 0) {
-            console.log("Schedule posts saved for dates:", savedDates)
-            const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
-            showNotification("success", "Schedule Saved", `Schedule saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) for branches: ${branchNames}`)
-          } else {
-            showNotification("error", "Save Error", "Failed to save schedules to Firestore")
-            setShowSaveModal(false)
-            return
-          }
+          // Save single schedule document for the selected date
+          const currentTime = new Date().toTimeString().slice(0, 5)
+          const savedId = await addScheduleToFirestore({
+            date: selectedDate,
+            scheduleFor: selectedDate,
+            time: currentTime,
+            manuallyScheduled: true, // Flag this as manually scheduled
+            assignments: allAssignments.map((a) => ({
+              employeeId: a.employeeId,
+              employeeName: a.employeeName,
+              branchId: a.branchId,
+              branchName: a.branchName,
+              isPresent: true,
+              shift: a.shift,
+            })),
+          })
+
+          console.log("[Manual Schedule] Successfully saved schedule for", selectedDate, "Document ID:", savedId)
+          const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
+          showNotification("success", "Schedule Saved", `Manual schedule saved for ${selectedDate} with ${allAssignments.length} crew members across: ${branchNames}`)
         } catch (err) {
-          console.error("Error saving schedules:", err)
-          showNotification("error", "Save Error", "Failed to persist schedules to Firestore")
-          setShowSaveModal(false)
+          console.error("[Manual Schedule] Error saving schedule:", err)
+          showNotification("error", "Save Error", "Failed to save schedule to Firestore")
           return
         }
+      } else {
+        showNotification("info", "No Assignments", "No crew members assigned for this schedule")
       }
     } catch (err) {
-      console.error("Error saving schedules:", err)
-      showNotification("error", "Save Error", "Failed to persist schedules to Firestore")
-      setShowSaveModal(false)
-      return
+      console.error("[Manual Schedule] Error:", err)
+      showNotification("error", "Save Error", "Failed to save schedule")
     }
-
-    setShowSaveModal(false)
-
-    showNotification("success", "Schedule Saved", `Schedule has been saved for ${scheduleDate} at ${scheduleTime}.`)
   }
 
   const getCurrentWeekDates = () => {
@@ -1724,41 +1680,7 @@ export default function SchedulingPage() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={showSaveModal} onOpenChange={setShowSaveModal}>
-        <DialogContent className="max-w-md mx-auto">
-          <DialogHeader>
-            <DialogTitle>Schedule Post Options</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="scheduleDate">Date</Label>
-              <Input
-                id="scheduleDate"
-                type="date"
-                value={scheduleDate}
-                onChange={(e) => setScheduleDate(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="scheduleTime">Time</Label>
-              <Input
-                id="scheduleTime"
-                type="time"
-                value={scheduleTime}
-                onChange={(e) => setScheduleTime(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col sm:flex-row justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowSaveModal(false)} className="w-full sm:w-auto">
-              Cancel
-            </Button>
-            <Button onClick={handleSchedulePost} className="w-full sm:w-auto">
-              Schedule Post
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+
     </div>
   )
 }
