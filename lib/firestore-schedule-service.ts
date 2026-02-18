@@ -154,11 +154,12 @@ export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | 
   }
 }
 
-// Get all schedules for a specific date
+// Get all schedules for a specific date (do not filter by scheduleFor)
 export const getSchedulesForDate = async (date: string): Promise<Schedule[]> => {
   try {
     const q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", date))
     const snap = await getDocs(q)
+    // Return all schedules for this date, regardless of scheduleFor
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Schedule))
   } catch (error) {
     console.error("❌ Error fetching schedules:", error)

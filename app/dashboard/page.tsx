@@ -9,6 +9,23 @@ import { Search, Users } from "lucide-react"
 import { useNotification } from "@/components/notification-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
+import { getTodayAttendance, AttendanceRecord } from "@/lib/firestore-attendance-service"
+import { getSchedulesForDate, Schedule } from "@/lib/firestore-schedule-service"
+import { updateScheduleAssignments } from "@/lib/firestore-schedule-service"
+
+// Helper: pick only the schedule for today (no fallback)
+function pickTodaySchedule(schedules, todayISO) {
+  return schedules.find(s => s.scheduleFor === todayISO) || schedules.find(s => s.date === todayISO) || null;
+}
+
+function getMonday(date: Date) {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  d.setHours(0,0,0,0)
+  return d
+}
 
 export default function DashboardPage() {
   const { showNotification } = useNotification()
@@ -16,18 +33,48 @@ export default function DashboardPage() {
   const [branches, setBranches] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [attendance, setAttendance] = useState<Record<string, boolean>>({})
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([])
   const [searchQuery, setSearchQuery] = useState("")
 
-  // Fetch Firestore employees and branches on mount
+  const [scheduleData, setScheduleData] = useState<Schedule | null>(null)
+
+  // Fetch Firestore employees, branches, and today's attendance on mount
   useEffect(() => {
     const fetchData = async () => {
       try {
         setIsLoading(true)
-        const [emps, brs] = await Promise.all([getActiveEmployees(), getAllBranches()])
-        console.log("Dashboard: Fetched employees from Firestore", emps)
-        console.log("Dashboard: Fetched branches from Firestore", brs)
+        const [emps, brs] = await Promise.all([
+          getActiveEmployees(),
+          getAllBranches(),
+        ])
         setEmployees(emps)
         setBranches(brs)
+        // Find the current week's Monday and Sunday
+        const today = new Date()
+        const todayISO = today.toISOString().split("T")[0]
+        const monday = getMonday(today)
+        const weekDates: string[] = []
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(monday)
+          d.setDate(monday.getDate() + i)
+          weekDates.push(d.toISOString().split("T")[0])
+        }
+        // Fetch all schedules for the week
+        let allSchedules: any[] = []
+        for (const dateISO of weekDates) {
+          const schedules = await getSchedulesForDate(dateISO)
+          if (dateISO === todayISO) {
+            console.log('[DEBUG] Schedules fetched for today', todayISO, schedules)
+          }
+          allSchedules = allSchedules.concat(schedules)
+        }
+        // Only show today's schedule, never fallback to previous days
+        const todaySchedule = pickTodaySchedule(allSchedules, todayISO)
+        if (todaySchedule) {
+          setScheduleData(todaySchedule)
+        } else {
+          setScheduleData(null)
+        }
       } catch (error) {
         console.error("Dashboard: Error fetching data from Firestore:", error)
         showNotification("error", "Error", "Failed to load dashboard data")
@@ -41,10 +88,62 @@ export default function DashboardPage() {
   // Use employees from Firestore
   const crews = employees
 
-  // Calculate attendance statistics
-  const presentCount = crews.filter((crew) => attendance[String(crew.id)]).length
-  const totalCount = crews.length
-  const attendancePercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
+  // Calculate attendance statistics based on scheduleData (deduplicated)
+  let allScheduledEmployees: { employeeId: string, employeeName?: string, isPresent: boolean, branchName?: string }[] = [];
+  if (scheduleData) {
+    // From branchAssignments (preferred)
+    if (scheduleData.branchAssignments) {
+      for (const branch of scheduleData.branchAssignments) {
+        for (const emp of branch.employees) {
+          allScheduledEmployees.push({
+            employeeId: emp.employeeId,
+            employeeName: emp.employeeName,
+            isPresent: emp.isPresent,
+            branchName: branch.branchName
+          })
+        }
+      }
+    }
+    // From assignments (legacy flat array)
+    if (scheduleData.assignments) {
+      for (const emp of scheduleData.assignments) {
+        allScheduledEmployees.push({
+          employeeId: emp.employeeId,
+          employeeName: emp.employeeName,
+          isPresent: emp.isPresent,
+          branchName: emp.branchName
+        })
+      }
+    }
+  }
+  // Deduplicate by employeeId (in case of overlap)
+  const uniqueScheduledEmployees = Object.values(
+    allScheduledEmployees.reduce((acc, emp) => {
+      acc[emp.employeeId] = emp;
+      return acc;
+    }, {} as Record<string, typeof allScheduledEmployees[0]>)
+  );
+  const presentCount = uniqueScheduledEmployees.filter(e => e.isPresent).length;
+  const totalCount = uniqueScheduledEmployees.length;
+  const attendancePercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
+
+  // Debug: Show all scheduled employees for troubleshooting
+  console.log("[DEBUG] All scheduled employees:", uniqueScheduledEmployees)
+
+  // Debug: Log scheduleData and scheduledCrewsByBranch after every update
+  useEffect(() => {
+    console.log('[DEBUG] scheduleData:', scheduleData);
+    if (scheduleData && scheduleData.branchAssignments) {
+      const scheduledCrewsByBranch = {};
+      for (const branch of scheduleData.branchAssignments) {
+        scheduledCrewsByBranch[branch.branchName] = branch.employees.map(emp => ({
+          ...emp,
+          branchName: branch.branchName
+        }));
+      }
+      console.log('[DEBUG] scheduledCrewsByBranch:', scheduledCrewsByBranch);
+    }
+  }, [scheduleData]);
 
   const handleToggleAttendance = (crewId: string | number) => {
     const key = String(crewId)
@@ -69,41 +168,74 @@ export default function DashboardPage() {
     }
   }
 
+  // Fix: Use await updateScheduleAssignments and then force a state update by fetching only the updated schedule document by id
+  const handleToggleScheduledAttendance = async (employeeId: string, branchName: string) => {
+    if (!scheduleData || !scheduleData.branchAssignments) return;
+    // Find the branch
+    const branchIdx = scheduleData.branchAssignments.findIndex(b => b.branchName === branchName);
+    if (branchIdx === -1) return;
+    // Find the employee
+    const empIdx = scheduleData.branchAssignments[branchIdx].employees.findIndex(e => e.employeeId === employeeId);
+    if (empIdx === -1) return;
+    // Toggle isPresent
+    const updatedBranchAssignments = scheduleData.branchAssignments.map((b, bIdx) =>
+      bIdx === branchIdx
+        ? {
+            ...b,
+            employees: b.employees.map((e, eIdx) =>
+              eIdx === empIdx ? { ...e, isPresent: !e.isPresent } : e
+            ),
+          }
+        : b
+    );
+    // Prepare assignments in flat format for Firestore
+    const updatedAssignments = updatedBranchAssignments.flatMap(b =>
+      b.employees.map(e => ({
+        employeeId: e.employeeId,
+        employeeName: e.employeeName,
+        branchId: b.branchId,
+        branchName: b.branchName,
+        isPresent: e.isPresent,
+        shift: e.shift,
+      }))
+    );
+    try {
+      await updateScheduleAssignments(scheduleData.id, updatedAssignments);
+      // Fetch the updated schedule by id to ensure we get the latest Firestore state
+      const { doc, getDoc } = await import("firebase/firestore");
+      const { db } = await import("@/lib/firebase");
+      const docRef = doc(db, "schedules", scheduleData.id);
+      const snap = await getDoc(docRef);
+      if (snap.exists()) {
+        setScheduleData({ id: snap.id, ...snap.data() });
+      }
+      showNotification("success", "Attendance Updated", "Attendance status updated successfully.");
+    } catch (err) {
+      showNotification("error", "Update Failed", "Could not update attendance in Firestore.");
+    }
+  }
+
   // Get all employees that match the search query
   const filteredCrews = crews.filter((crew) => {
     const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
     return fullName.includes(searchQuery.toLowerCase())
   })
 
-  // Group employees by their assigned branch (from Firestore)
-  const getCrewsByBranch = () => {
-    const result: Record<string, typeof crews> = {
-      Unassigned: [],
-    }
-
-    // Initialize with all branches
-    branches.forEach((branch) => {
-      result[branch.branchName] = []
-    })
-
-    // Assign employees to their branches based on branchId field
-    filteredCrews.forEach((crew) => {
-      if (crew.branchId) {
-        const branch = branches.find((b) => String(b.id) === String(crew.branchId))
-        if (branch) {
-          result[branch.branchName].push(crew)
-        } else {
-          result["Unassigned"].push(crew)
-        }
-      } else {
-        result["Unassigned"].push(crew)
+  // Group scheduled employees by branch from the selected schedule, not from employee.branchId
+  const getScheduledCrewsByBranch = () => {
+    const result: Record<string, typeof uniqueScheduledEmployees> = {}
+    if (scheduleData && scheduleData.branchAssignments) {
+      for (const branch of scheduleData.branchAssignments) {
+        result[branch.branchName] = branch.employees.map(emp => ({
+          ...emp,
+          branchName: branch.branchName
+        }))
       }
-    })
-
+    }
     return result
   }
 
-  const crewsByBranch = getCrewsByBranch()
+  const scheduledCrewsByBranch = getScheduledCrewsByBranch()
 
   return (
     <div className="space-y-8">
@@ -180,9 +312,9 @@ export default function DashboardPage() {
             <CardTitle>Attendance by Branch</CardTitle>
           </CardHeader>
           <CardContent>
-            {crews.length > 0 ? (
+            {Object.keys(scheduledCrewsByBranch).length > 0 ? (
               <div className="space-y-8">
-                {Object.entries(crewsByBranch).map(
+                {Object.entries(scheduledCrewsByBranch).map(
                   ([branchName, branchCrews]) =>
                     branchCrews.length > 0 && (
                       <div key={branchName} className="space-y-4">
@@ -190,26 +322,26 @@ export default function DashboardPage() {
                         <div className="space-y-3">
                           {branchCrews.map((crew) => (
                             <div
-                              key={crew.id}
+                              key={crew.employeeId}
                               className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg border bg-card gap-4"
                             >
                               <div>
                                 <div className="font-medium">
-                                  {crew.firstName} {crew.surname}
+                                  {crew.employeeName}
                                 </div>
-                                <div className="text-sm text-muted-foreground">{crew.type || "Employee"}</div>
+                                <div className="text-sm text-muted-foreground">Scheduled</div>
                               </div>
                               <div className="flex items-center gap-4">
-                                <Badge variant={attendance[String(crew.id)] ? "default" : "destructive"}>
-                                  {attendance[String(crew.id)] ? "Present" : "Absent"}
+                                <Badge variant={crew.isPresent ? "default" : "destructive"}>
+                                  {crew.isPresent ? "Present" : "Absent"}
                                 </Badge>
                                 <Button
-                                  variant={attendance[String(crew.id)] ? "destructive" : "default"}
+                                  variant={crew.isPresent ? "destructive" : "default"}
                                   size="sm"
-                                  onClick={() => handleToggleAttendance(crew.id)}
+                                  onClick={() => handleToggleScheduledAttendance(crew.employeeId, branchName)}
                                   className="w-full sm:w-auto"
                                 >
-                                  Mark {attendance[String(crew.id)] ? "Absent" : "Present"}
+                                  Mark {crew.isPresent ? "Absent" : "Present"}
                                 </Button>
                               </div>
                             </div>
@@ -226,7 +358,7 @@ export default function DashboardPage() {
                 )}
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">No employees registered</div>
+              <div className="text-center py-8 text-muted-foreground">No scheduled employees</div>
             )}
           </CardContent>
         </Card>
@@ -236,49 +368,39 @@ export default function DashboardPage() {
             <CardTitle>Branch Assignments</CardTitle>
           </CardHeader>
           <CardContent>
-            {branches.length > 0 ? (
+            {Object.keys(scheduledCrewsByBranch).length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {branches.map((branch) => {
-                  // Get employees assigned to this branch
-                  const assignedEmps = filteredCrews.filter(
-                    (emp) => emp.branchId && String(emp.branchId) === String(branch.id),
-                  )
-
-                  return (
-                    <Card key={branch.id} className="border shadow-none">
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-lg">{branch.branchName}</CardTitle>
-                        <p className="text-sm text-muted-foreground">{branch.address}</p>
-                      </CardHeader>
-                      <CardContent>
-                        {assignedEmps.length > 0 ? (
-                          <div className="space-y-2">
-                            {assignedEmps.map((emp) => (
-                              <div
-                                key={emp.id}
-                                className={`flex justify-between items-center p-2 rounded-md text-sm ${
-                                  attendance[String(emp.id)]
-                                    ? "bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"
-                                    : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
-                                }`}
-                              >
-                                <span>
-                                  {emp.firstName} {emp.surname}
-                                </span>
-                                <span>{attendance[String(emp.id)] ? "✓" : "✗"}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-center py-4 text-sm text-muted-foreground">No employees assigned</div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )
-                })}
+                {Object.entries(scheduledCrewsByBranch).map(([branchName, branchCrews]) => (
+                  <Card key={branchName} className="border shadow-none">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-lg">{branchName}</CardTitle>
+                      {/* Optionally show branch address if available from branches list */}
+                      <p className="text-sm text-muted-foreground">
+                        {branches.find(b => b.branchName === branchName)?.address || ""}
+                      </p>
+                    </CardHeader>
+                    <CardContent>
+                      {branchCrews.length > 0 ? (
+                        <div className="space-y-2">
+                          {branchCrews.map(emp => (
+                            <div
+                              key={emp.employeeId}
+                              className="flex justify-between items-center p-2 rounded-md text-sm"
+                            >
+                              <span>{emp.employeeName}</span>
+                              <span>{emp.isPresent ? "✓" : "✗"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-4 text-sm text-muted-foreground">No employees assigned</div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
               </div>
             ) : (
-              <div className="text-center py-8 text-muted-foreground">No branches available</div>
+              <div className="text-center py-8 text-muted-foreground">No branch assignments available</div>
             )}
           </CardContent>
         </Card>
@@ -286,3 +408,4 @@ export default function DashboardPage() {
     </div>
   )
 }
+
