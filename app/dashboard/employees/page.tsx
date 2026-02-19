@@ -21,6 +21,7 @@ import {
   deleteEmployee,
   type Employee,
 } from "@/lib/firestore-employee-service"
+import { getTodayAttendance } from "@/lib/firestore-attendance-service"
 
 export default function EmployeesPage() {
   // Wrap the entire component in an error boundary
@@ -42,21 +43,30 @@ function EmployeesContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeCrews, setActiveCrews] = useState<Employee[]>([])
   const [archivedCrews, setArchivedCrews] = useState<Employee[]>([])
+  const [todayAttendance, setTodayAttendance] = useState<Record<string, boolean>>({})
 
-  // Fetch employees from Firestore
+  // Fetch employees and today's attendance from MySQL
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
         setIsLoading(true)
-        console.log("Fetching employees from Firestore...")
-        const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
-        console.log("Active employees:", active)
-        console.log("Archived employees:", archived)
+        const [active, archived, attendance] = await Promise.all([
+          getActiveEmployees(),
+          getArchivedEmployees(),
+          getTodayAttendance(),
+        ])
         setActiveCrews(active)
         setArchivedCrews(archived)
+
+        // Build a lookup: employeeId -> true/false based on daily_attendance
+        const attendanceMap: Record<string, boolean> = {}
+        for (const rec of attendance) {
+          attendanceMap[rec.employeeId] = rec.status === "present"
+        }
+        setTodayAttendance(attendanceMap)
         
         if (active.length === 0 && archived.length === 0) {
-          showNotification("info", "No Employees", "No employees found. Make sure there are users with role 'employee' in the Firebase 'users' collection.")
+          showNotification("info", "No Employees", "No employees found in the database.")
         }
       } catch (error) {
         console.error("Error fetching employees:", error)
@@ -68,6 +78,11 @@ function EmployeesContent() {
 
     fetchEmployees()
   }, [showNotification])
+
+  // Helper: check attendance from daily_attendance table (not users.isPresent)
+  const isEmployeePresent = (employeeId: string) => {
+    return todayAttendance[employeeId] === true
+  }
 
   // Filter crews based on search query
   const filteredActiveCrews = activeCrews.filter((crew) => {
@@ -393,8 +408,8 @@ function EmployeesContent() {
               </div>
               <div>{employee.type || "Not specified"}</div>
               <div>
-                <Badge variant={employee.isPresent ? "default" : "destructive"}>
-                  {employee.isPresent ? "Present" : "Absent"}
+                <Badge variant={isEmployeePresent(employee.id) ? "default" : "destructive"}>
+                  {isEmployeePresent(employee.id) ? "Present" : "Absent"}
                 </Badge>
               </div>
               <div>{employee.branchId ? employee.branchId : "Unassigned"}</div>

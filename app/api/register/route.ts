@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "../../../lib/firebaseAdmin";
+import { query, execute } from "../../../lib/mysql";
 import bcrypt from "bcryptjs";
 
 export async function POST(req: Request) {
@@ -7,41 +7,49 @@ export async function POST(req: Request) {
 
   try {
     // Check if email already exists
-    const snapshot = await db.collection("users")
-      .where("email", "==", formData.email.toLowerCase())
-      .limit(1)
-      .get();
+    const existing = await query(
+      "SELECT id FROM users WHERE email = ? LIMIT 1",
+      [formData.email.toLowerCase()]
+    );
 
-    if (!snapshot.empty) {
+    if (existing.length > 0) {
       return NextResponse.json({ message: "Email is already in use" }, { status: 400 });
     }
 
     // Hash password before saving
     const passwordHash = await bcrypt.hash(formData.password, 10);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
 
-    const newEmployee = {
+    await execute(
+      `INSERT INTO users (id, firstName, surname, nickname, email, passwordHash, phone, address, type, availability, isPresent, isEmployee, archived, status, role, hireDate, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, 'approved', 'employee', ?, ?, ?)`,
+      [
+        id,
+        formData.firstName || "",
+        formData.surname || "",
+        formData.nickname || null,
+        formData.email.toLowerCase(),
+        passwordHash,
+        formData.phone || null,
+        formData.address || null,
+        formData.type || "full-time",
+        formData.availability ? JSON.stringify(formData.availability) : null,
+        now.split("T")[0],
+        now,
+        now,
+      ]
+    );
+
+    return NextResponse.json({
+      id,
       firstName: formData.firstName,
       surname: formData.surname,
-      nickname: formData.nickname,
       email: formData.email.toLowerCase(),
-      passwordHash,
-      phone: formData.phone,
-      address: formData.address,
-      type: formData.type,
-      availability: formData.availability || [],
-      isPresent: false,
-      isEmployee: true,
-      status: "approved",
       role: "employee",
-      hireDate: new Date().toISOString().split("T")[0],
-      createdAt: new Date().toISOString(),
-    };
-
-    const docRef = await db.collection("users").add(newEmployee);
-
-    return NextResponse.json({ id: docRef.id, ...newEmployee }, { status: 201 });
+    }, { status: 201 });
   } catch (error: any) {
-    console.error(error);
+    console.error("Register error:", error);
     return NextResponse.json({ message: "Server error" }, { status: 500 });
   }
 }

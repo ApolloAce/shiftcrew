@@ -9,7 +9,7 @@ import { Search, Users } from "lucide-react"
 import { useNotification } from "@/components/notification-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
-import { getTodayAttendance, AttendanceRecord } from "@/lib/firestore-attendance-service"
+import { getTodayAttendance, AttendanceRecord, saveAttendanceRecord } from "@/lib/firestore-attendance-service"
 import { getSchedulesForDate, Schedule } from "@/lib/firestore-schedule-service"
 import { updateScheduleAssignments } from "@/lib/firestore-schedule-service"
 
@@ -145,13 +145,26 @@ export default function DashboardPage() {
     }
   }, [scheduleData]);
 
-  const handleToggleAttendance = (crewId: string | number) => {
+  const handleToggleAttendance = async (crewId: string | number) => {
     const key = String(crewId)
     const newStatus = !attendance[key]
     setAttendance((prev) => ({ ...prev, [key]: newStatus }))
 
     // Find crew details for notification
     const crew = crews.find((c) => String(c.id) === key)
+    const todayISO = new Date().toISOString().split("T")[0]
+
+    // Persist attendance to MySQL
+    try {
+      await saveAttendanceRecord({
+        employeeId: key,
+        employeeName: crew ? `${crew.firstName} ${crew.surname}` : "Unknown",
+        date: todayISO,
+        status: newStatus ? "present" : "absent",
+      })
+    } catch (err) {
+      console.error("Failed to save attendance:", err)
+    }
 
     if (crew) {
       showNotification(
@@ -201,17 +214,28 @@ export default function DashboardPage() {
     );
     try {
       await updateScheduleAssignments(scheduleData.id, updatedAssignments);
-      // Fetch the updated schedule by id to ensure we get the latest Firestore state
-      const { doc, getDoc } = await import("firebase/firestore");
-      const { db } = await import("@/lib/firebase");
-      const docRef = doc(db, "schedules", scheduleData.id);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        setScheduleData({ id: snap.id, ...snap.data() });
+
+      // Also persist to daily_attendance table
+      const todayISO = new Date().toISOString().split("T")[0]
+      const emp = updatedBranchAssignments[branchIdx].employees[empIdx]
+      await saveAttendanceRecord({
+        employeeId: emp.employeeId,
+        employeeName: emp.employeeName || "Unknown",
+        date: todayISO,
+        status: emp.isPresent ? "present" : "absent",
+        branchName,
+      })
+
+      // Fetch the updated schedule to ensure we get the latest state
+      const schedules = await getSchedulesForDate(scheduleData.date);
+      const updated = schedules.find((s: any) => s.id === scheduleData.id);
+      if (updated) {
+        setScheduleData(updated);
       }
       showNotification("success", "Attendance Updated", "Attendance status updated successfully.");
     } catch (err) {
-      showNotification("error", "Update Failed", "Could not update attendance in Firestore.");
+      console.error("Toggle scheduled attendance error:", err);
+      showNotification("error", "Update Failed", "Could not update attendance.");
     }
   }
 

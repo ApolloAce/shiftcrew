@@ -1,8 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { collection, getDocs, query, where, deleteDoc, doc } from "firebase/firestore"
-import { db } from "@/lib/firebase"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -375,20 +373,14 @@ export default function SchedulingPage() {
 
       const schedulesByDate: Record<string, any> = {}
       
-      // Fetch schedules for each day of the week by scheduleFor field
+      // Fetch schedules for each day of the week via API
       for (let i = 0; i < 7; i++) {
         const d = new Date(monday)
         d.setDate(monday.getDate() + i)
         const dateISO = formatDateLocal(d)
         
         try {
-          // Query by scheduleFor since regenerated schedules have all days with date=Monday
-          const scheduleRef = collection(db, "schedules")
-          const q = query(scheduleRef, where("scheduleFor", "==", dateISO))
-          const snap = await getDocs(q)
-          const schedules: any[] = (snap.docs as Array<any>).map((doc: any) => ({ id: doc.id, ...doc.data() }))
-          
-          console.log("[fetchWeekSchedulesFromFirestore] Fetched by scheduleFor for", dateISO, ":", schedules?.length || 0, "documents")
+          const schedules = await getSchedulesForDateFromFirestore(dateISO)
           
           if (schedules && schedules.length > 0) {
             // Use the most recent schedule for this date
@@ -417,13 +409,8 @@ export default function SchedulingPage() {
                 })
               }
               latestSchedule.branchAssignments = Object.values(branchMap)
-              console.log("[fetchWeekSchedulesFromFirestore] Transformed assignments to branchAssignments for", dateISO, ":", latestSchedule.branchAssignments.length, "branches")
             }
             
-            console.log("[fetchWeekSchedulesFromFirestore] Latest schedule for", dateISO, ":", { 
-              branchAssignments: latestSchedule.branchAssignments?.length, 
-              assignments: latestSchedule.assignments?.length 
-            })
             schedulesByDate[dateISO] = latestSchedule
           }
         } catch (e) {
@@ -431,10 +418,9 @@ export default function SchedulingPage() {
         }
       }
       
-      console.log("[fetchWeekSchedulesFromFirestore] Total schedules found:", Object.keys(schedulesByDate).length)
       setWeekSchedules(schedulesByDate)
     } catch (err) {
-      console.error("Error fetching week schedules from Firestore:", err)
+      console.error("Error fetching week schedules:", err)
     }
   }
 
@@ -813,21 +799,7 @@ export default function SchedulingPage() {
         try {
           console.log("[Manual Schedule] Saving schedule for date:", selectedDate, "with", allAssignments.length, "assignments")
 
-          // Delete any existing schedule for just this date
-          try {
-            const scheduleQuery = query(
-              collection(db, "schedules"),
-              where("scheduleFor", "==", selectedDate)
-            )
-            const snapshots = await getDocs(scheduleQuery)
-            for (const docSnap of snapshots.docs) {
-              await deleteDoc(doc(db, "schedules", docSnap.id))
-              console.log("[Manual Schedule] Deleted existing schedule for", selectedDate)
-            }
-          } catch (err) {
-            console.warn("[Manual Schedule] Could not delete existing schedule for date:", err)
-          }
-
+          // Delete any existing schedule for just this date (handled by addSchedule upsert)
           // Save single schedule document for the selected date
           const currentTime = new Date().toTimeString().slice(0, 5)
           

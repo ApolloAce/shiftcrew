@@ -1,39 +1,25 @@
-import { db } from "@/lib/firebase"
-import { collection, getDocs, query, where } from "firebase/firestore"
+import { query } from "@/lib/mysql"
 
 export async function GET() {
   try {
-    console.log("Testing Firestore connection...")
+    console.log("Testing MySQL connection...")
     
     // Test 1: Get all users
-    const allUsersSnapshot = await getDocs(collection(db, "users"))
-    console.log(`Total users in collection: ${allUsersSnapshot.size}`)
-    
-    const allUsersData = allUsersSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }))
+    const allUsersData = await query("SELECT id, firstName, surname, email, role FROM users")
     
     // Test 2: Get users with role: employee
-    const q = query(collection(db, "users"), where("role", "==", "employee"))
-    const employeesSnapshot = await getDocs(q)
-    console.log(`Employees with role='employee': ${employeesSnapshot.size}`)
-    
-    const employeesData = employeesSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }))
+    const employeesData = await query("SELECT id, firstName, surname, email, role FROM users WHERE role = 'employee'")
     
     return Response.json({
       success: true,
-      totalUsers: allUsersSnapshot.size,
-      employees: employeesSnapshot.size,
+      totalUsers: allUsersData.length,
+      employees: employeesData.length,
       allUsersData,
       employeesData,
-      message: "Firestore connection successful"
+      message: "MySQL connection successful"
     })
   } catch (error) {
-    console.error("Firestore test error:", error)
+    console.error("MySQL test error:", error)
     return Response.json({
       success: false,
       error: error instanceof Error ? error.message : String(error)

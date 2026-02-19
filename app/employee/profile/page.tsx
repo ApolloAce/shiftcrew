@@ -25,7 +25,7 @@ export default function EmployeeProfilePage() {
   // Profile form
   const [profileForm, setProfileForm] = useState({
     phone: "",
-    email: '",',
+    email: "",
     address: "",
     emergencyContact: "",
     password: "",

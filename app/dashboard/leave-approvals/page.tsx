@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
+import { getAllLeaveRequests, approveLeaveRequest, rejectLeaveRequest } from "@/lib/firestore-leave-service"
 import { format, parseISO, differenceInDays } from "date-fns"
 import { Calendar, CheckCircle, XCircle } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
@@ -20,43 +21,32 @@ export default function LeaveApprovalsPage() {
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
   const [rejectionReason, setRejectionReason] = useState("")
 
-  // Fetch Firestore employees on mount
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setIsLoading(true)
-        const emps = await getActiveEmployees()
-        console.log("Leave Approvals: Fetched employees from Firestore", emps)
-        setEmployees(emps)
-
-        // Load mock pending leave requests (would come from Firestore in production)
-        const mockRequests = [
-          {
-            id: 1,
-            employeeId: emps[0]?.id || "emp1",
-            startDate: new Date().toISOString().split("T")[0],
-            endDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-            reason: "Annual leave",
-            status: "pending",
-          },
-        ]
-        setPendingRequests(mockRequests)
-      } catch (error) {
-        console.error("Leave Approvals: Error fetching data from Firestore:", error)
-        showNotification("error", "Error", "Failed to load employee data")
-      } finally {
-        setIsLoading(false)
-      }
+  const fetchData = async () => {
+    try {
+      setIsLoading(true)
+      const [emps, leaves] = await Promise.all([getActiveEmployees(), getAllLeaveRequests()])
+      setEmployees(emps)
+      // Show pending requests (or all if you want history)
+      setPendingRequests(leaves.filter((l: any) => l.status === "pending"))
+    } catch (error) {
+      console.error("Leave Approvals: Error fetching data:", error)
+      showNotification("error", "Error", "Failed to load leave data")
+    } finally {
+      setIsLoading(false)
     }
+  }
+
+  useEffect(() => {
     fetchData()
-  }, [showNotification])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const getEmployeeName = (employeeId: string | number) => {
     const emp = employees.find((e) => String(e.id) === String(employeeId))
     return emp ? `${emp.firstName} ${emp.surname}` : "Unknown Employee"
   }
 
-  const handleApprove = (requestId: number) => {
+  const handleApprove = (requestId: string) => {
     const request = pendingRequests.find((r) => r.id === requestId)
     if (!request) return
 
@@ -65,14 +55,10 @@ export default function LeaveApprovalsPage() {
       description: `Are you sure you want to approve ${getEmployeeName(request.employeeId)}'s leave request from ${format(parseISO(request.startDate), "MMM d, yyyy")} to ${format(parseISO(request.endDate), "MMM d, yyyy")}?`,
       confirmLabel: "Approve",
       confirmVariant: "bg-green-600 hover:bg-green-700",
-      onConfirm: () => {
+      onConfirm: async () => {
         try {
-          // In production, this would call a Firestore function
-          // approveLeaveRequest(requestId, adminId)
-
-          // Update local state
+          await approveLeaveRequest(requestId)
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
-
           showNotification(
             "success",
             "Leave Request Approved",
@@ -86,7 +72,7 @@ export default function LeaveApprovalsPage() {
     })
   }
 
-  const handleReject = (requestId: number) => {
+  const handleReject = (requestId: string) => {
     const request = pendingRequests.find((r) => r.id === requestId)
     if (!request) return
 
@@ -95,7 +81,7 @@ export default function LeaveApprovalsPage() {
       description: (
         <div className="space-y-4">
           <p>
-            Are you sure you want to reject {getEmployeeName(request.employeeId)}'s leave request from{" "}
+            Are you sure you want to reject {getEmployeeName(request.employeeId)}&apos;s leave request from{" "}
             {format(parseISO(request.startDate), "MMM d, yyyy")} to {format(parseISO(request.endDate), "MMM d, yyyy")}?
           </p>
           <div className="space-y-2">
@@ -112,21 +98,15 @@ export default function LeaveApprovalsPage() {
       ),
       confirmLabel: "Reject",
       confirmVariant: "bg-red-600 hover:bg-red-700",
-      onConfirm: () => {
+      onConfirm: async () => {
         try {
-          // In production, this would call a Firestore function
-          // rejectLeaveRequest(requestId, adminId, rejectionReason)
-
-          // Update local state
+          await rejectLeaveRequest(requestId, rejectionReason || undefined)
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
-
           showNotification(
             "info",
             "Leave Request Rejected",
             `${getEmployeeName(request.employeeId)}'s leave request has been rejected.`,
           )
-
-          // Reset rejection reason
           setRejectionReason("")
         } catch (error) {
           console.error("Error rejecting leave request:", error)

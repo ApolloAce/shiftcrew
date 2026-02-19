@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-import { db } from "../../../lib/firebaseAdmin";
+import { query } from "../../../lib/mysql";
 import bcrypt from "bcryptjs";
 
 export async function POST(req: Request) {
@@ -15,16 +15,16 @@ export async function POST(req: Request) {
   }
 
   try {
-    const snapshot = await db.collection("users")
-      .where("email", "==", identifier)
-      .limit(1)
-      .get();
+    const rows = await query(
+      "SELECT * FROM users WHERE email = ? LIMIT 1",
+      [identifier]
+    );
 
-    if (snapshot.empty) {
+    if (rows.length === 0) {
       return NextResponse.json({ message: "Invalid username or password" }, { status: 401 });
     }
 
-    const userDoc = snapshot.docs[0].data();
+    const userDoc = rows[0];
 
     const isMatch = await bcrypt.compare(password, userDoc.passwordHash);
     if (!isMatch) {
@@ -32,17 +32,21 @@ export async function POST(req: Request) {
     }
 
     const userData = {
-      id: snapshot.docs[0].id,
+      id: userDoc.id,
+      firstName: userDoc.firstName,
+      surname: userDoc.surname,
       email: userDoc.email,
       role: userDoc.role,
-      name: `${userDoc.firstName} ${userDoc.surname}`,
+      type: userDoc.type || "full-time",
       isAdmin: userDoc.role === "admin",
-      isEmployee: userDoc.isEmployee === true,
+      isEmployee: userDoc.role === "employee" || !!userDoc.isEmployee,
+      status: userDoc.status || "approved",
+      branchId: userDoc.branchId || null,
     };
 
     return NextResponse.json({ user: userData }, { status: 200 });
   } catch (error: any) {
-    console.error(error);
+    console.error("Login error:", error);
     return NextResponse.json({ message: "Server error" }, { status: 500 });
   }
 }
