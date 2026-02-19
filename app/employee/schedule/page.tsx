@@ -85,10 +85,12 @@ export default function EmployeeSchedulePage() {
                   (e: any) => String(e.employeeId) === String(currentUser.id)
                 )
                 if (found) {
+                  // shift can be a string ("AM") or object ({start, end})
+                  const shiftObj = typeof found.shift === "object" && found.shift ? found.shift : null
                   employeeShifts.push({
-                    date: sched.date,
-                    startTime: found.shift?.start || sched.time || "",
-                    endTime: found.shift?.end || "",
+                    date: sched.scheduleFor || sched.date,
+                    startTime: shiftObj?.start || sched.time || "",
+                    endTime: shiftObj?.end || "",
                     branchName: branch.branchName || "Unknown Branch",
                     branchId: branch.branchId || "",
                     notes: sched.notes,

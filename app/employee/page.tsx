@@ -77,10 +77,11 @@ export default function EmployeeDashboard() {
                           (e: any) => String(e.employeeId) === String(userData.id)
                         )
                         if (found) {
+                          const shiftObj = typeof found.shift === "object" && found.shift ? found.shift : null
                           setTodaySchedule({
-                            date: sched.date,
-                            startTime: found.shift?.start || sched.time || "",
-                            endTime: found.shift?.end || "",
+                            date: sched.scheduleFor || sched.date,
+                            startTime: shiftObj?.start || sched.time || "",
+                            endTime: shiftObj?.end || "",
                             branchName: branch.branchName || "Unknown",
                             notes: sched.notes || "",
                           })
