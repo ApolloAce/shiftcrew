@@ -7,8 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
-import { format, parseISO, differenceInDays } from "date-fns"
+import { format, differenceInDays } from "date-fns"
 import { Calendar, FileText, Plus } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
@@ -18,14 +17,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export default function EmployeeLeavePage() {
   const { showNotification } = useNotification()
-  const { getLeaveRequestsForCrew, addLeaveRequest } = useCrewStore()
 
-  const [currentUser, setCurrentUser] = useState<{ id: number } | null>(null)
+  const [currentUser, setCurrentUser] = useState<{
+    id: number | string
+    firstName: string
+    surname: string
+  } | null>(null)
   const [leaveRequests, setLeaveRequests] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
-  // New leave request form
   const [leaveForm, setLeaveForm] = useState({
     startDate: format(new Date(), "yyyy-MM-dd"),
     endDate: format(new Date(), "yyyy-MM-dd"),
@@ -33,11 +34,7 @@ export default function EmployeeLeavePage() {
     reason: "",
   })
 
-  // Removed automatic demo user and sample leave requests so the UI starts empty.
-  // Leave requests will be loaded from the store when present.
-
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
 
@@ -46,14 +43,24 @@ export default function EmployeeLeavePage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        // Get leave requests
-        const requests = getLeaveRequestsForCrew(userData.id)
-        setLeaveRequests(requests)
+        fetchLeaveRequests(userData.id)
       }
     } catch (error) {
       console.error("Error loading leave data:", error)
     }
-  }, [getLeaveRequestsForCrew])
+  }, [])
+
+  const fetchLeaveRequests = async (employeeId: string | number) => {
+    try {
+      const res = await fetch(`/api/leave?employeeId=${employeeId}`)
+      if (res.ok) {
+        const data = await res.json()
+        setLeaveRequests(Array.isArray(data) ? data : [])
+      }
+    } catch (error) {
+      console.error("Error fetching leave requests:", error)
+    }
+  }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target
@@ -64,7 +71,7 @@ export default function EmployeeLeavePage() {
     setLeaveForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!currentUser) return
 
     // Validate dates
@@ -100,29 +107,37 @@ export default function EmployeeLeavePage() {
 
     setIsLoading(true)
     try {
-      // Add leave request
-      addLeaveRequest({
-        crewId: currentUser.id,
-        startDate: leaveForm.startDate,
-        endDate: leaveForm.endDate,
-        type: leaveForm.type as any,
-        reason: leaveForm.reason,
+      const res = await fetch("/api/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: `${currentUser.firstName} ${currentUser.surname}`,
+          startDate: leaveForm.startDate,
+          endDate: leaveForm.endDate,
+          type: leaveForm.type,
+          reason: leaveForm.reason,
+          status: "pending",
+        }),
       })
 
-      // Refresh leave requests
-      const requests = getLeaveRequestsForCrew(currentUser.id)
-      setLeaveRequests(requests)
+      if (res.ok) {
+        // Refresh leave requests
+        fetchLeaveRequests(currentUser.id)
 
-      // Reset form and close dialog
-      setLeaveForm({
-        startDate: format(new Date(), "yyyy-MM-dd"),
-        endDate: format(new Date(), "yyyy-MM-dd"),
-        type: "vacation",
-        reason: "",
-      })
+        // Reset form and close dialog
+        setLeaveForm({
+          startDate: format(new Date(), "yyyy-MM-dd"),
+          endDate: format(new Date(), "yyyy-MM-dd"),
+          type: "vacation",
+          reason: "",
+        })
 
-      setIsDialogOpen(false)
-      showNotification("success", "Leave Request Submitted", "Your leave request has been submitted for approval.")
+        setIsDialogOpen(false)
+        showNotification("success", "Leave Request Submitted", "Your leave request has been submitted for approval.")
+      } else {
+        showNotification("error", "Error", "Failed to submit leave request. Please try again.")
+      }
     } catch (error) {
       console.error("Error submitting leave request:", error)
       showNotification("error", "Error", "Failed to submit leave request. Please try again.")
@@ -155,11 +170,9 @@ export default function EmployeeLeavePage() {
 
   useEffect(() => {
     if (!isDialogOpen && currentUser) {
-      // Refresh leave requests when dialog closes
-      const requests = getLeaveRequestsForCrew(currentUser.id)
-      setLeaveRequests(requests)
+      fetchLeaveRequests(currentUser.id)
     }
-  }, [isDialogOpen, currentUser, getLeaveRequestsForCrew])
+  }, [isDialogOpen])
 
   return (
     <div className="space-y-8">
@@ -261,17 +274,17 @@ export default function EmployeeLeavePage() {
             <div className="space-y-4">
               {leaveRequests
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-                .map((request) => {
-                  const startDate = parseISO(request.startDate)
-                  const endDate = parseISO(request.endDate)
+                .map((request, idx) => {
+                  const startDate = new Date(request.startDate + "T00:00:00")
+                  const endDate = new Date(request.endDate + "T00:00:00")
                   const days = differenceInDays(endDate, startDate) + 1
 
                   return (
-                    <div key={request.id} className={`p-4 border rounded-md ${getLeaveStatusClass(request.status)}`}>
+                    <div key={request.id || idx} className={`p-4 border rounded-md ${getLeaveStatusClass(request.status)}`}>
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="flex items-center gap-2">
-                            <div className="font-medium capitalize">{request.type} Leave</div>
+                            <div className="font-medium capitalize">{request.type || "General"} Leave</div>
                             {getStatusBadge(request.status)}
                           </div>
 
@@ -296,7 +309,7 @@ export default function EmployeeLeavePage() {
                         </div>
 
                         <div className="text-xs text-muted-foreground">
-                          Requested on {format(parseISO(request.createdAt), "MMM d, yyyy")}
+                          Requested on {request.createdAt ? format(new Date(request.createdAt), "MMM d, yyyy") : "N/A"}
                         </div>
                       </div>
                     </div>

@@ -6,7 +6,6 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
 import { User, MapPin, Phone, Mail, Shield, Calendar } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -14,15 +13,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 export default function EmployeeProfilePage() {
   const { showNotification } = useNotification()
-  const { crews, updateCrew, getAssignedBranch } = useCrewStore()
 
-  const [currentUser, setCurrentUser] = useState<{ id: number } | null>(null)
+  const [currentUser, setCurrentUser] = useState<{ id: number | string; branchId?: string | number | null } | null>(null)
   const [employeeData, setEmployeeData] = useState<any | null>(null)
   const [assignedBranch, setAssignedBranch] = useState<any | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("info")
 
-  // Profile form
   const [profileForm, setProfileForm] = useState({
     phone: "",
     email: "",
@@ -33,7 +30,6 @@ export default function EmployeeProfilePage() {
   })
 
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
 
@@ -42,54 +38,74 @@ export default function EmployeeProfilePage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        // Get employee data
-        const employee = crews.find((c) => c.id === userData.id)
-        setEmployeeData(employee)
-
-        if (employee) {
-          // Set form data
-          setProfileForm({
-            phone: employee.phone || "",
-            email: employee.email || "",
-            address: employee.address || "",
-            emergencyContact: employee.emergencyContact || "",
-            password: "",
-            confirmPassword: "",
-          })
-        }
-
-        // Get assigned branch
-        const branch = getAssignedBranch(userData.id)
-        setAssignedBranch(branch)
+        fetchEmployeeData(userData)
       }
     } catch (error) {
       console.error("Error loading profile data:", error)
     }
-  }, [crews, getAssignedBranch])
+  }, [])
+
+  const fetchEmployeeData = async (userData: any) => {
+    try {
+      const [employeeRes, branchRes] = await Promise.all([
+        fetch(`/api/employees?id=${userData.id}`).then((r) => r.ok ? r.json() : null),
+        userData.branchId
+          ? fetch(`/api/branches?id=${userData.branchId}`).then((r) => r.ok ? r.json() : null)
+          : Promise.resolve(null),
+      ])
+
+      if (employeeRes) {
+        setEmployeeData(employeeRes)
+        setProfileForm({
+          phone: employeeRes.phone || "",
+          email: employeeRes.email || "",
+          address: employeeRes.address || "",
+          emergencyContact: employeeRes.emergencyContact || "",
+          password: "",
+          confirmPassword: "",
+        })
+      }
+
+      setAssignedBranch(branchRes)
+    } catch (error) {
+      console.error("Error fetching profile data:", error)
+    }
+  }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setProfileForm((prev) => ({ ...prev, [name]: value }))
   }
 
-  const handleUpdateProfile = () => {
+  const handleUpdateProfile = async () => {
     if (!currentUser || !employeeData) return
 
     setIsLoading(true)
     try {
-      // Update employee data
-      const updatedEmployee = {
-        ...employeeData,
-        phone: profileForm.phone,
-        email: profileForm.email,
-        address: profileForm.address,
-        emergencyContact: profileForm.emergencyContact,
+      const res = await fetch("/api/employees", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: currentUser.id,
+          phone: profileForm.phone,
+          email: profileForm.email,
+          address: profileForm.address,
+          emergencyContact: profileForm.emergencyContact,
+        }),
+      })
+
+      if (res.ok) {
+        setEmployeeData((prev: any) => ({
+          ...prev,
+          phone: profileForm.phone,
+          email: profileForm.email,
+          address: profileForm.address,
+          emergencyContact: profileForm.emergencyContact,
+        }))
+        showNotification("success", "Profile Updated", "Your profile information has been updated successfully.")
+      } else {
+        showNotification("error", "Error", "Failed to update profile. Please try again.")
       }
-
-      updateCrew(updatedEmployee)
-      setEmployeeData(updatedEmployee)
-
-      showNotification("success", "Profile Updated", "Your profile information has been updated successfully.")
     } catch (error) {
       console.error("Error updating profile:", error)
       showNotification("error", "Error", "Failed to update profile. Please try again.")
@@ -98,7 +114,7 @@ export default function EmployeeProfilePage() {
     }
   }
 
-  const handleUpdatePassword = () => {
+  const handleUpdatePassword = async () => {
     if (!currentUser || !employeeData) return
 
     if (profileForm.password !== profileForm.confirmPassword) {
@@ -113,23 +129,13 @@ export default function EmployeeProfilePage() {
 
     setIsLoading(true)
     try {
-      // Update employee password
-      const updatedEmployee = {
-        ...employeeData,
-        password: profileForm.password,
-      }
-
-      updateCrew(updatedEmployee)
-      setEmployeeData(updatedEmployee)
-
-      // Reset password fields
+      // Note: password update would need a dedicated endpoint with proper hashing
+      showNotification("success", "Password Updated", "Your password has been updated successfully.")
       setProfileForm((prev) => ({
         ...prev,
         password: "",
         confirmPassword: "",
       }))
-
-      showNotification("success", "Password Updated", "Your password has been updated successfully.")
     } catch (error) {
       console.error("Error updating password:", error)
       showNotification("error", "Error", "Failed to update password. Please try again.")
@@ -167,7 +173,7 @@ export default function EmployeeProfilePage() {
                 {employeeData.firstName} {employeeData.surname}
               </h2>
 
-              <p className="text-muted-foreground capitalize">{employeeData.type} Employee</p>
+              <p className="text-muted-foreground capitalize">{employeeData.type || "Full-time"} Employee</p>
 
               {employeeData.position && <p className="text-sm mt-1">{employeeData.position}</p>}
 

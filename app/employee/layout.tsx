@@ -9,7 +9,6 @@ import { Bell, Calendar, Clock, FileText, Home, LogOut, Menu, User } from "lucid
 import { cn } from "@/lib/utils"
 import { useMobile } from "@/hooks/use-mobile"
 import { Badge } from "@/components/ui/badge"
-import { useCrewStore } from "@/lib/cleanStore"
 
 interface EmployeeLayoutProps {
   children: React.ReactNode
@@ -19,12 +18,12 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
   const router = useRouter()
   const pathname = usePathname()
   const isMobile = useMobile()
-  const { getNotificationsForCrew } = useCrewStore()
   const [currentUser, setCurrentUser] = useState<{
-    id: number
+    id: number | string
     firstName: string
     surname: string
     type: string
+    branchId?: string | number | null
   } | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
 
@@ -51,15 +50,11 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
       }
 
       setCurrentUser(userData)
-
-      // Count unread notifications
-      const notifications = getNotificationsForCrew(userData.id)
-      setUnreadNotifications(notifications.filter((n) => !n.isRead).length)
     } catch (error) {
       console.error("Error parsing user data:", error)
       router.push("/")
     }
-  }, [router, getNotificationsForCrew])
+  }, [router])
 
   const handleLogout = () => {
     sessionStorage.removeItem("currentUser")

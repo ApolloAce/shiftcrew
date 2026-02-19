@@ -11,15 +11,14 @@ import { Bell, CheckCircle, AlertCircle, Info, Calendar } from "lucide-react"
 
 export default function EmployeeNotificationsPage() {
   const { showNotification } = useNotification()
-  const { getNotificationsForCrew, markNotificationAsRead, getSchedulesForCrew } = useCrewStore()
+  const { getNotificationsForCrew, markNotificationAsRead } = useCrewStore()
 
-  const [currentUser, setCurrentUser] = useState<{ id: number } | null>(null)
+  const [currentUser, setCurrentUser] = useState<{ id: number | string } | null>(null)
   const [notifications, setNotifications] = useState<any[]>([])
   const [upcomingShifts, setUpcomingShifts] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
 
@@ -28,23 +27,62 @@ export default function EmployeeNotificationsPage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        // Get notifications
-        const userNotifications = getNotificationsForCrew(userData.id)
+        // Get notifications from the store (no dedicated API endpoint)
+        const userNotifications = getNotificationsForCrew(Number(userData.id))
         setNotifications(userNotifications)
 
-        // Get upcoming shifts for reminders
-        const schedules = getSchedulesForCrew(userData.id)
-        const today = new Date().toISOString().split("T")[0]
-        const upcoming = schedules
-          .filter((s) => s.date >= today)
-          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-          .slice(0, 3)
-        setUpcomingShifts(upcoming)
+        // Fetch upcoming shifts from API
+        fetchUpcomingShifts(userData)
       }
     } catch (error) {
       console.error("Error loading notifications:", error)
     }
-  }, [getNotificationsForCrew, getSchedulesForCrew])
+  }, [getNotificationsForCrew])
+
+  const fetchUpcomingShifts = async (userData: any) => {
+    try {
+      const today = new Date().toISOString().split("T")[0]
+      const res = await fetch(`/api/schedules`)
+      if (!res.ok) return
+
+      const schedules = await res.json()
+      const shifts: any[] = []
+
+      if (Array.isArray(schedules)) {
+        for (const sched of schedules) {
+          if (sched.date < today) continue
+
+          const assignments = typeof sched.branchAssignments === "string"
+            ? JSON.parse(sched.branchAssignments)
+            : sched.branchAssignments
+
+          if (Array.isArray(assignments)) {
+            for (const branch of assignments) {
+              const found = branch.employees?.find(
+                (e: any) => String(e.employeeId) === String(userData.id)
+              )
+              if (found) {
+                shifts.push({
+                  id: sched.id,
+                  date: sched.date,
+                  startTime: found.shift?.start || sched.time || "TBD",
+                  endTime: found.shift?.end || "TBD",
+                  branchName: branch.branchName || "Unknown",
+                  notes: sched.notes,
+                })
+              }
+            }
+          }
+        }
+      }
+
+      // Sort by date and take first 3
+      shifts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      setUpcomingShifts(shifts.slice(0, 3))
+    } catch (error) {
+      console.error("Error fetching upcoming shifts:", error)
+    }
+  }
 
   const handleMarkAsRead = (notificationId: number) => {
     if (!currentUser) return
@@ -53,8 +91,7 @@ export default function EmployeeNotificationsPage() {
     try {
       markNotificationAsRead(notificationId)
 
-      // Refresh notifications
-      const userNotifications = getNotificationsForCrew(currentUser.id)
+      const userNotifications = getNotificationsForCrew(Number(currentUser.id))
       setNotifications(userNotifications)
 
       showNotification("success", "Notification Marked as Read", "The notification has been marked as read.")
@@ -71,11 +108,9 @@ export default function EmployeeNotificationsPage() {
 
     setIsLoading(true)
     try {
-      // Mark all unread notifications as read
       notifications.filter((n) => !n.isRead).forEach((n) => markNotificationAsRead(n.id))
 
-      // Refresh notifications
-      const userNotifications = getNotificationsForCrew(currentUser.id)
+      const userNotifications = getNotificationsForCrew(Number(currentUser.id))
       setNotifications(userNotifications)
 
       showNotification("success", "All Notifications Marked as Read", "All notifications have been marked as read.")
@@ -129,30 +164,34 @@ export default function EmployeeNotificationsPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {upcomingShifts.map((shift) => (
-                <div key={shift.id} className="p-4 border rounded-md bg-blue-50 dark:bg-blue-950/20">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <div className="font-medium">Shift on {format(parseISO(shift.date), "EEEE, MMMM d, yyyy")}</div>
-                      <div className="text-sm mt-1">
-                        Time: {shift.startTime.substring(0, 5)} - {shift.endTime.substring(0, 5)}
+              {upcomingShifts.map((shift, idx) => {
+                const shiftDate = new Date(shift.date + "T00:00:00")
+                const isToday = shift.date === new Date().toISOString().split("T")[0]
+
+                return (
+                  <div key={shift.id || idx} className="p-4 border rounded-md bg-blue-50 dark:bg-blue-950/20">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium">
+                          Shift on {format(shiftDate, "EEEE, MMMM d, yyyy")}
+                        </div>
+                        <div className="text-sm mt-1">
+                          Time: {shift.startTime} - {shift.endTime}
+                        </div>
+                        <div className="text-sm mt-1 text-muted-foreground">
+                          Branch: {shift.branchName}
+                        </div>
+                        {shift.notes && (
+                          <div className="text-sm mt-1 text-muted-foreground">Note: {shift.notes}</div>
+                        )}
                       </div>
-                      {shift.notes && <div className="text-sm mt-1 text-muted-foreground">Note: {shift.notes}</div>}
+                      <Badge className={isToday ? "bg-green-500" : ""}>
+                        {isToday ? "Today" : format(shiftDate, "MMM d")}
+                      </Badge>
                     </div>
-                    <Badge
-                      className={
-                        parseISO(shift.date).toISOString().split("T")[0] === new Date().toISOString().split("T")[0]
-                          ? "bg-green-500"
-                          : ""
-                      }
-                    >
-                      {parseISO(shift.date).toISOString().split("T")[0] === new Date().toISOString().split("T")[0]
-                        ? "Today"
-                        : format(parseISO(shift.date), "MMM d")}
-                    </Badge>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </CardContent>
         </Card>
@@ -184,7 +223,9 @@ export default function EmployeeNotificationsPage() {
                         <div className="flex justify-between items-start">
                           <div className="font-medium">{notification.title}</div>
                           <div className="text-xs text-muted-foreground">
-                            {format(parseISO(notification.createdAt), "MMM d, yyyy h:mm a")}
+                            {notification.createdAt
+                              ? format(parseISO(notification.createdAt), "MMM d, yyyy h:mm a")
+                              : ""}
                           </div>
                         </div>
 

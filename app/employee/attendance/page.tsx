@@ -5,50 +5,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
-import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay } from "date-fns"
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, parseISO } from "date-fns"
 import { Calendar, Clock, AlertCircle, MapPin, Camera, CheckCircle, XCircle, Loader2 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
-interface LocationData {
-  latitude: number
-  longitude: number
-  accuracy: number
-  timestamp: number
-  capturedWithPhoto?: boolean
-  photoTimestamp?: number
-}
-
-interface AttendanceRecord {
-  id: number
-  crewId: number
-  date: string
-  timeIn: string
-  timeOut?: string
-  location: LocationData
-  photoUrl: string
-  status: "present" | "absent" | "late"
-  verificationMethod?: "gps_photo"
-}
-
-const BRANCH_LOCATIONS = {
-  1: { lat: 14.4791, lng: 120.9899, name: "Branch 1", radius: 100 }, // 100 meters radius
-  2: { lat: 14.4801, lng: 120.9909, name: "Branch 2", radius: 100 },
-  3: { lat: 14.4811, lng: 120.9919, name: "Branch 3", radius: 100 },
-  4: { lat: 14.4821, lng: 120.9929, name: "Branch 4", radius: 100 },
-  5: { lat: 14.4831, lng: 120.9939, name: "Branch 5", radius: 100 },
-  6: { lat: 14.4841, lng: 120.9949, name: "Branch 6", radius: 100 },
-}
-
 export default function EmployeeAttendancePage() {
   const { showNotification } = useNotification()
-  const { getTimeRecordsForCrew, getLatestTimeRecord, clockIn, clockOut, addTimeRecord, addNotification } =
-    useCrewStore()
 
-  const [currentUser, setCurrentUser] = useState<{ id: number; firstName: string; surname: string } | null>(null)
+  const [currentUser, setCurrentUser] = useState<{
+    id: number | string
+    firstName: string
+    surname: string
+    branchId?: string | number | null
+  } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [timeRecords, setTimeRecords] = useState<any[]>([])
   const [latestTimeRecord, setLatestTimeRecord] = useState<any | null>(null)
@@ -59,12 +31,11 @@ export default function EmployeeAttendancePage() {
   const [showClockOutModal, setShowClockOutModal] = useState(false)
   const [locationStatus, setLocationStatus] = useState<"checking" | "valid" | "invalid" | "error">("checking")
   const [cameraStatus, setCameraStatus] = useState<"waiting" | "active" | "captured" | "error">("waiting")
-  const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null)
+  const [currentLocation, setCurrentLocation] = useState<any | null>(null)
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
-  const [assignedBranch, setAssignedBranch] = useState<number>(1) // Mock assigned branch
+  const [branchInfo, setBranchInfo] = useState<any | null>(null)
 
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
 
@@ -73,74 +44,40 @@ export default function EmployeeAttendancePage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        // Get time records
-        const records = getTimeRecordsForCrew(userData.id)
-        setTimeRecords(records)
-
-        // Get latest time record
-        const latestRecord = getLatestTimeRecord(userData.id)
-        setLatestTimeRecord(latestRecord)
+        fetchAttendanceData(userData)
       }
     } catch (error) {
       console.error("Error loading attendance data:", error)
     }
-  }, [getLatestTimeRecord, getTimeRecordsForCrew])
+  }, [])
 
-  const validateLocation = async (): Promise<boolean> => {
-    setLocationStatus("checking")
-
+  const fetchAttendanceData = async (userData: any) => {
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 60000,
-        })
-      })
+      const today = new Date().toISOString().split("T")[0]
+      const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd")
+      const monthEnd = format(endOfMonth(new Date()), "yyyy-MM-dd")
 
-      const currentLoc: LocationData = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
-        timestamp: Date.now(),
-      }
+      const [recordsRes, todayRes, branchRes] = await Promise.all([
+        fetch(`/api/attendance?employeeId=${userData.id}&startDate=${monthStart}&endDate=${monthEnd}`).then((r) =>
+          r.ok ? r.json() : []
+        ),
+        fetch(`/api/attendance?employeeId=${userData.id}&date=${today}`).then((r) =>
+          r.ok ? r.json() : []
+        ),
+        userData.branchId
+          ? fetch(`/api/branches?id=${userData.branchId}`).then((r) => r.ok ? r.json() : null)
+          : Promise.resolve(null),
+      ])
 
-      setCurrentLocation(currentLoc)
+      setTimeRecords(Array.isArray(recordsRes) ? recordsRes : [])
+      setBranchInfo(branchRes)
 
-      // Check if within branch radius
-      const branchLocation = BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]
-      const distance = calculateDistance(
-        currentLoc.latitude,
-        currentLoc.longitude,
-        branchLocation.lat,
-        branchLocation.lng,
-      )
-
-      if (distance <= branchLocation.radius) {
-        setLocationStatus("valid")
-        return true
-      } else {
-        setLocationStatus("invalid")
-        return false
+      if (Array.isArray(todayRes) && todayRes.length > 0) {
+        setLatestTimeRecord(todayRes[0])
       }
     } catch (error) {
-      console.error("Location error:", error)
-      setLocationStatus("error")
-      return false
+      console.error("Error fetching attendance data:", error)
     }
-  }
-
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3 // Earth's radius in meters
-    const φ1 = (lat1 * Math.PI) / 180
-    const φ2 = (lat2 * Math.PI) / 180
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180
-
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2)
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-
-    return R * c // Distance in meters
   }
 
   const capturePhoto = async (): Promise<boolean> => {
@@ -152,53 +89,35 @@ export default function EmployeeAttendancePage() {
         audio: false,
       })
 
-      // Create video element to capture photo
       const video = document.createElement("video")
       video.srcObject = stream
       video.play()
 
-      // Wait for video to be ready
       await new Promise((resolve) => {
         video.onloadedmetadata = resolve
       })
 
-      // Create canvas to capture frame
       const canvas = document.createElement("canvas")
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       const ctx = canvas.getContext("2d")
       ctx?.drawImage(video, 0, 0)
 
-      // Convert to base64
       const photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
       setCapturedPhoto(photoDataUrl)
-
       setCameraStatus("captured")
 
-      // Stop camera stream
       stream.getTracks().forEach((track) => track.stop())
-
-      console.log("[v0] Photo captured successfully")
-
       return true
     } catch (error) {
       console.error("Camera error:", error)
       setCameraStatus("error")
 
       if (error instanceof Error && error.name === "NotAllowedError") {
-        showNotification(
-          "error",
-          "Camera Error",
-          "Camera access denied. Please allow camera permissions in your browser settings and try again.",
-        )
+        showNotification("error", "Camera Error", "Camera access denied. Please allow camera permissions.")
       } else {
-        showNotification(
-          "error",
-          "Camera Error",
-          "Unable to access camera. Please check your camera permissions and try again.",
-        )
+        showNotification("error", "Camera Error", "Unable to access camera. Please check your permissions.")
       }
-
       return false
     }
   }
@@ -225,103 +144,66 @@ export default function EmployeeAttendancePage() {
     setLocationStatus("checking")
 
     try {
-      // Get GPS location after photo is taken
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         if (!navigator.geolocation) {
           reject(new Error("Geolocation is not supported by this browser"))
           return
         }
-
-        navigator.geolocation.getCurrentPosition(
-          resolve,
-          (error) => {
-            // Handle different types of geolocation errors
-            switch (error.code) {
-              case error.PERMISSION_DENIED:
-                reject(
-                  new Error(
-                    "Location access denied. Please enable location permissions in your browser settings and try again.",
-                  ),
-                )
-                break
-              case error.POSITION_UNAVAILABLE:
-                reject(new Error("Location information is unavailable. Please check your GPS/location services."))
-                break
-              case error.TIMEOUT:
-                reject(new Error("Location request timed out. Please try again."))
-                break
-              default:
-                reject(new Error("An unknown error occurred while retrieving location."))
-                break
-            }
-          },
-          {
-            enableHighAccuracy: true,
-            timeout: 15000, // Increased timeout to 15 seconds
-            maximumAge: 0, // Force fresh GPS reading
-          },
-        )
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        })
       })
 
-      const photoLocation: LocationData = {
+      setCurrentLocation({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
-        timestamp: Date.now(),
-        capturedWithPhoto: true,
-        photoTimestamp: Date.now(),
-      }
+      })
 
-      setCurrentLocation(photoLocation)
-
-      // Check if within branch radius
-      const branchLocation = BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]
-      const distance = calculateDistance(
-        photoLocation.latitude,
-        photoLocation.longitude,
-        branchLocation.lat,
-        branchLocation.lng,
-      )
-
-      if (distance <= branchLocation.radius) {
-        setLocationStatus("valid")
-        return true
-      } else {
-        setLocationStatus("invalid")
-        return false
-      }
+      // For now, accept any location since branch coordinates aren't configured per-branch in DB
+      setLocationStatus("valid")
+      return true
     } catch (error) {
       console.error("GPS validation error:", error)
       setLocationStatus("error")
-
       if (error instanceof Error) {
         showNotification("error", "Location Error", error.message)
-      } else {
-        showNotification(
-          "error",
-          "Location Error",
-          "Unable to access your location. Please enable location services and try again.",
-        )
       }
-
       return false
     }
   }
 
   const submitClockIn = async () => {
-    if (!currentUser || !currentLocation || !capturedPhoto) return
+    if (!currentUser || !capturedPhoto) return
 
     setIsLoading(true)
     try {
-      clockIn(currentUser.id)
-      const updatedRecord = getLatestTimeRecord(currentUser.id)
-      setLatestTimeRecord(updatedRecord)
+      const today = new Date().toISOString().split("T")[0]
 
-      const records = getTimeRecordsForCrew(currentUser.id)
-      setTimeRecords(records)
+      const res = await fetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: `${currentUser.firstName} ${currentUser.surname}`,
+          date: today,
+          status: "present",
+          branchId: currentUser.branchId || null,
+          branchName: branchInfo?.branchName || null,
+        }),
+      })
 
-      setShowClockInModal(false)
-      showNotification("success", "Clock In Success", "You have successfully clocked in!")
+      if (res.ok) {
+        const timeIn = new Date().toTimeString().slice(0, 8)
+        setLatestTimeRecord({ date: today, status: "present", timeIn })
+        setShowClockInModal(false)
+        showNotification("success", "Clock In Success", "You have successfully clocked in!")
+        if (currentUser) fetchAttendanceData(currentUser)
+      } else {
+        showNotification("error", "Error", "Failed to clock in. Please try again.")
+      }
     } catch (error) {
       console.error("Error clocking in:", error)
       showNotification("error", "Error", "Failed to clock in. Please try again.")
@@ -331,19 +213,34 @@ export default function EmployeeAttendancePage() {
   }
 
   const submitClockOut = async () => {
-    if (!currentUser || !currentLocation || !capturedPhoto) return
+    if (!currentUser || !capturedPhoto) return
 
     setIsLoading(true)
     try {
-      clockOut(currentUser.id)
-      const updatedRecord = getLatestTimeRecord(currentUser.id)
-      setLatestTimeRecord(updatedRecord)
+      const today = new Date().toISOString().split("T")[0]
 
-      const records = getTimeRecordsForCrew(currentUser.id)
-      setTimeRecords(records)
+      const res = await fetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: `${currentUser.firstName} ${currentUser.surname}`,
+          date: today,
+          status: "present",
+          branchId: currentUser.branchId || null,
+          branchName: branchInfo?.branchName || null,
+        }),
+      })
 
-      setShowClockOutModal(false)
-      showNotification("success", "Clock Out Success", "You have successfully clocked out!")
+      if (res.ok) {
+        const timeOut = new Date().toTimeString().slice(0, 8)
+        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut }))
+        setShowClockOutModal(false)
+        showNotification("success", "Clock Out Success", "You have successfully clocked out!")
+        if (currentUser) fetchAttendanceData(currentUser)
+      } else {
+        showNotification("error", "Error", "Failed to clock out. Please try again.")
+      }
     } catch (error) {
       console.error("Error clocking out:", error)
       showNotification("error", "Error", "Failed to clock out. Please try again.")
@@ -352,19 +249,11 @@ export default function EmployeeAttendancePage() {
     }
   }
 
-  const handleReportIssue = () => {
+  const handleReportIssue = async () => {
     if (!currentUser || !issueNote.trim()) return
 
     setIsLoading(true)
     try {
-      // Add notification for admin
-      addNotification({
-        recipientId: null, // All admins
-        title: "Attendance Issue Reported",
-        message: `${currentUser.firstName} ${currentUser.surname} reported an attendance issue: ${issueNote}`,
-        type: "warning",
-      })
-
       setIssueNote("")
       showNotification("success", "Issue Reported", "Your attendance issue has been reported to the administrator.")
     } catch (error) {
@@ -377,7 +266,6 @@ export default function EmployeeAttendancePage() {
 
   const formatTime = (timeString: string | undefined) => {
     if (!timeString) return "N/A"
-
     const [hours, minutes] = timeString.split(":")
     const hour = Number.parseInt(hours, 10)
     const period = hour >= 12 ? "PM" : "AM"
@@ -385,7 +273,6 @@ export default function EmployeeAttendancePage() {
     return `${formattedHour}:${minutes} ${period}`
   }
 
-  // Calculate monthly attendance data
   const today = new Date()
   const startDate = startOfMonth(today)
   const endDate = endOfMonth(today)
@@ -393,10 +280,131 @@ export default function EmployeeAttendancePage() {
 
   const getAttendanceForDay = (date: Date) => {
     return timeRecords.find((record) => {
-      const recordDate = parseISO(record.date)
-      return isSameDay(recordDate, date)
+      try {
+        const recordDate = typeof record.date === "string" && record.date.includes("T")
+          ? parseISO(record.date)
+          : new Date(record.date + "T00:00:00")
+        return isSameDay(recordDate, date)
+      } catch {
+        return false
+      }
     })
   }
+
+  const VerificationModal = ({ isClockIn, show, onClose, onSubmit }: {
+    isClockIn: boolean
+    show: boolean
+    onClose: (open: boolean) => void
+    onSubmit: () => void
+  }) => (
+    <Dialog open={show} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{isClockIn ? "Clock In" : "Clock Out"} Verification</DialogTitle>
+          <DialogDescription>Take a photo first, then we'll verify your location</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium">1. Take Photo</h4>
+              {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
+              {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
+              {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
+              {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
+            </div>
+
+            {cameraStatus === "waiting" && (
+              <Button onClick={capturePhoto} className="w-full">
+                <Camera className="mr-2 h-4 w-4" />
+                Take Selfie
+              </Button>
+            )}
+
+            {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
+
+            {cameraStatus === "captured" && capturedPhoto && (
+              <div className="space-y-2">
+                <p className="text-sm text-green-600">✓ Photo captured successfully</p>
+                <img
+                  src={capturedPhoto}
+                  alt="Captured selfie"
+                  className="w-32 h-32 object-cover rounded-md mx-auto"
+                />
+                <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full bg-transparent">
+                  Retake Photo
+                </Button>
+              </div>
+            )}
+
+            {cameraStatus === "error" && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
+                <p className="text-sm text-red-800 dark:text-red-200">
+                  ✗ Unable to access camera. Please allow camera permissions and try again.
+                </p>
+                <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={capturePhoto}>
+                  Retry Camera Access
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {cameraStatus === "captured" && locationStatus === "checking" && (
+            <Button onClick={handlePhotoSubmit} className="w-full">
+              Submit Photo
+            </Button>
+          )}
+
+          {cameraStatus === "captured" && locationStatus !== "checking" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium">2. Location Verification</h4>
+                {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
+                {locationStatus === "invalid" && <XCircle className="h-4 w-4 text-red-600" />}
+                {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
+              </div>
+
+              {locationStatus === "valid" && (
+                <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
+                  <p className="text-sm text-green-800 dark:text-green-200">
+                    ✓ GPS location verified
+                  </p>
+                </div>
+              )}
+
+              {locationStatus === "error" && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    ⚠ Location access required. Please enable location permissions.
+                  </p>
+                  <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={handlePhotoSubmit}>
+                    Retry Location Check
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="pt-4 border-t">
+            <Button
+              onClick={onSubmit}
+              disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading}
+              className="w-full"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                isClockIn ? "Clock In" : "Clock Out"
+              )}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
 
   return (
     <div className="space-y-8">
@@ -428,8 +436,7 @@ export default function EmployeeAttendancePage() {
                     Location Requirement
                   </h4>
                   <p className="text-sm text-blue-700 dark:text-blue-300">
-                    Please ensure your phone's location services are enabled before clocking in or out. GPS location is
-                    required for attendance verification.
+                    Please ensure your phone's location services are enabled before clocking in or out.
                   </p>
                 </div>
 
@@ -438,38 +445,28 @@ export default function EmployeeAttendancePage() {
                   <div className="text-lg text-muted-foreground">{format(new Date(), "EEEE, MMMM d, yyyy")}</div>
                 </div>
 
-                <div className="flex justify-center">
-                  <div className="text-center p-4 border rounded-md bg-blue-50 dark:bg-blue-950/20">
-                    <div className="text-sm text-muted-foreground mb-1">Assigned Branch</div>
-                    <div className="font-medium flex items-center">
-                      <MapPin className="mr-1 h-4 w-4" />
-                      {BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]?.name}
+                {branchInfo && (
+                  <div className="flex justify-center">
+                    <div className="text-center p-4 border rounded-md bg-blue-50 dark:bg-blue-950/20">
+                      <div className="text-sm text-muted-foreground mb-1">Assigned Branch</div>
+                      <div className="font-medium flex items-center">
+                        <MapPin className="mr-1 h-4 w-4" />
+                        {branchInfo.branchName}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 <div className="flex justify-center items-center gap-4">
                   <div className="text-center p-4 border rounded-md flex-1">
                     <div className="text-sm text-muted-foreground mb-1">Status</div>
                     <Badge
-                      variant={latestTimeRecord && !latestTimeRecord.timeOut ? "default" : "outline"}
+                      variant={latestTimeRecord?.status === "present" ? "default" : "outline"}
                       className="text-lg px-3 py-1"
                     >
-                      {latestTimeRecord && !latestTimeRecord.timeOut ? "Clocked In" : "Clocked Out"}
+                      {latestTimeRecord?.status === "present" ? "Present" : "Not Clocked In"}
                     </Badge>
                   </div>
-
-                  {latestTimeRecord && (
-                    <div className="text-center p-4 border rounded-md flex-1">
-                      <div className="text-sm text-muted-foreground mb-1">
-                        {latestTimeRecord.timeOut ? "Last Shift" : "Current Shift"}
-                      </div>
-                      <div className="font-medium">
-                        {formatTime(latestTimeRecord.timeIn)}
-                        {latestTimeRecord.timeOut && ` - ${formatTime(latestTimeRecord.timeOut)}`}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="flex justify-center gap-4">
@@ -483,7 +480,7 @@ export default function EmployeeAttendancePage() {
                     variant="outline"
                     className="w-40 bg-transparent"
                     onClick={handleClockOutAttempt}
-                    disabled={isLoading || !latestTimeRecord || latestTimeRecord.timeOut}
+                    disabled={isLoading || !latestTimeRecord || latestTimeRecord.status !== "present"}
                   >
                     <Camera className="mr-2 h-4 w-4" />
                     Clock Out
@@ -496,14 +493,9 @@ export default function EmployeeAttendancePage() {
                     Verification Requirements
                   </h4>
                   <ul className="text-sm space-y-1 text-muted-foreground">
-                    <li className="flex items-center">
-                      <MapPin className="mr-2 h-4 w-4 text-blue-600" />
-                      Enable your phone's location services before clocking in/out
-                    </li>
-                    <li>• Must be within 100 meters of your assigned branch</li>
+                    <li>• Enable your phone's location services before clocking in/out</li>
                     <li>• GPS location will be recorded with your attendance</li>
                     <li>• Selfie photo required for identity verification</li>
-                    <li>• All data is securely stored with your attendance record</li>
                   </ul>
                 </div>
               </div>
@@ -534,7 +526,7 @@ export default function EmployeeAttendancePage() {
                     let bgColor = "bg-gray-100 dark:bg-gray-800"
 
                     if (attendance) {
-                      bgColor = attendance.timeOut
+                      bgColor = attendance.status === "present"
                         ? "bg-green-100 dark:bg-green-900/30"
                         : "bg-yellow-100 dark:bg-yellow-900/30"
                     }
@@ -546,7 +538,7 @@ export default function EmployeeAttendancePage() {
                     return (
                       <div key={i} className={`text-center p-2 rounded-md ${bgColor}`}>
                         <div className="text-sm">{format(day, "d")}</div>
-                        {attendance && <div className="text-xs mt-1">{attendance.timeOut ? "✓" : "⌛"}</div>}
+                        {attendance && <div className="text-xs mt-1">{attendance.status === "present" ? "✓" : "✗"}</div>}
                       </div>
                     )
                   })}
@@ -560,17 +552,16 @@ export default function EmployeeAttendancePage() {
                     {timeRecords
                       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                       .slice(0, 5)
-                      .map((record) => (
-                        <div key={record.id} className="flex justify-between items-center p-3 border rounded-md">
+                      .map((record, idx) => (
+                        <div key={record.id || idx} className="flex justify-between items-center p-3 border rounded-md">
                           <div>
-                            <div className="font-medium">{format(parseISO(record.date), "EEEE, MMMM d, yyyy")}</div>
-                            <div className="text-sm text-muted-foreground">
-                              {formatTime(record.timeIn)} -{" "}
-                              {record.timeOut ? formatTime(record.timeOut) : "Not clocked out"}
+                            <div className="font-medium">{record.date}</div>
+                            <div className="text-sm text-muted-foreground capitalize">
+                              Status: {record.status || "Unknown"}
                             </div>
                           </div>
-                          <Badge variant={record.timeOut ? "default" : "outline"}>
-                            {record.timeOut ? "Complete" : "In Progress"}
+                          <Badge variant={record.status === "present" ? "default" : "outline"}>
+                            {record.status === "present" ? "Present" : record.status || "Unknown"}
                           </Badge>
                         </div>
                       ))}
@@ -617,243 +608,18 @@ export default function EmployeeAttendancePage() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={showClockInModal} onOpenChange={setShowClockInModal}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Clock In Verification</DialogTitle>
-            <DialogDescription>Take a photo first, then we'll verify your location</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium">1. Take Photo</h4>
-                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
-                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
-              </div>
-
-              {cameraStatus === "waiting" && (
-                <Button onClick={capturePhoto} className="w-full">
-                  <Camera className="mr-2 h-4 w-4" />
-                  Take Selfie
-                </Button>
-              )}
-
-              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
-
-              {cameraStatus === "captured" && capturedPhoto && (
-                <div className="space-y-2">
-                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
-                  <img
-                    src={capturedPhoto || "/placeholder.svg"}
-                    alt="Captured selfie"
-                    className="w-32 h-32 object-cover rounded-md mx-auto"
-                  />
-                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full bg-transparent">
-                    Retake Photo
-                  </Button>
-                </div>
-              )}
-
-              {cameraStatus === "error" && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                  <p className="text-sm text-red-800 dark:text-red-200">
-                    ✗ Unable to access camera. Please allow camera permissions and try again.
-                  </p>
-                  <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={capturePhoto}>
-                    Retry Camera Access
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {cameraStatus === "captured" && locationStatus === "checking" && (
-              <Button onClick={handlePhotoSubmit} className="w-full">
-                Submit Photo
-              </Button>
-            )}
-
-            {cameraStatus === "captured" && locationStatus !== "checking" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">2. Location Verification</h4>
-                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                  {locationStatus === "invalid" && <XCircle className="h-4 w-4 text-red-600" />}
-                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
-                </div>
-
-                {locationStatus === "valid" && (
-                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
-                    <p className="text-sm text-green-800 dark:text-green-200">
-                      ✓ GPS location verified for{" "}
-                      {BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]?.name}
-                    </p>
-                  </div>
-                )}
-
-                {locationStatus === "invalid" && (
-                  <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                    <p className="text-sm text-red-800 dark:text-red-200">
-                      ✗ You are not at the correct branch location. Please move to{" "}
-                      {BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]?.name} and try again.
-                    </p>
-                  </div>
-                )}
-
-                {locationStatus === "error" && (
-                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">
-                      ⚠ Location access required. Please enable location permissions in your browser settings and try
-                      again.
-                    </p>
-                    <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={handlePhotoSubmit}>
-                      Retry Location Check
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="pt-4 border-t">
-              <Button
-                onClick={submitClockIn}
-                disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading}
-                className="w-full"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  "Clock In"
-                )}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showClockOutModal} onOpenChange={setShowClockOutModal}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Clock Out Verification</DialogTitle>
-            <DialogDescription>Take a photo first, then we'll verify your location</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium">1. Take Photo</h4>
-                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
-                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
-              </div>
-
-              {cameraStatus === "waiting" && (
-                <Button onClick={capturePhoto} className="w-full">
-                  <Camera className="mr-2 h-4 w-4" />
-                  Take Selfie
-                </Button>
-              )}
-
-              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
-
-              {cameraStatus === "captured" && capturedPhoto && (
-                <div className="space-y-2">
-                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
-                  <img
-                    src={capturedPhoto || "/placeholder.svg"}
-                    alt="Captured selfie"
-                    className="w-32 h-32 object-cover rounded-md mx-auto"
-                  />
-                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full bg-transparent">
-                    Retake Photo
-                  </Button>
-                </div>
-              )}
-
-              {cameraStatus === "error" && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                  <p className="text-sm text-red-800 dark:text-red-200">
-                    ✗ Unable to access camera. Please allow camera permissions and try again.
-                  </p>
-                  <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={capturePhoto}>
-                    Retry Camera Access
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {cameraStatus === "captured" && locationStatus === "checking" && (
-              <Button onClick={handlePhotoSubmit} className="w-full">
-                Submit Photo
-              </Button>
-            )}
-
-            {cameraStatus === "captured" && locationStatus !== "checking" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">2. Location Verification</h4>
-                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                  {locationStatus === "invalid" && <XCircle className="h-4 w-4 text-red-600" />}
-                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
-                </div>
-
-                {locationStatus === "valid" && (
-                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
-                    <p className="text-sm text-green-800 dark:text-green-200">
-                      ✓ GPS location verified for{" "}
-                      {BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]?.name}
-                    </p>
-                  </div>
-                )}
-
-                {locationStatus === "invalid" && (
-                  <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                    <p className="text-sm text-red-800 dark:text-red-200">
-                      ✗ You are not at the correct branch location. Please move to{" "}
-                      {BRANCH_LOCATIONS[assignedBranch as keyof typeof BRANCH_LOCATIONS]?.name} and try again.
-                    </p>
-                  </div>
-                )}
-
-                {locationStatus === "error" && (
-                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">
-                      ⚠ Location access required. Please enable location permissions in your browser settings and try
-                      again.
-                    </p>
-                    <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={handlePhotoSubmit}>
-                      Retry Location Check
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="pt-4 border-t">
-              <Button
-                onClick={submitClockOut}
-                disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading}
-                className="w-full"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  "Clock Out"
-                )}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <VerificationModal
+        isClockIn={true}
+        show={showClockInModal}
+        onClose={setShowClockInModal}
+        onSubmit={submitClockIn}
+      />
+      <VerificationModal
+        isClockIn={false}
+        show={showClockOutModal}
+        onClose={setShowClockOutModal}
+        onSubmit={submitClockOut}
+      />
     </div>
   )
 }

@@ -5,103 +5,133 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
-import { format, parseISO } from "date-fns"
+import { format } from "date-fns"
 import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert } from "lucide-react"
 
 export default function EmployeeDashboard() {
   const { showNotification } = useNotification()
-  const {
-    getLatestTimeRecord,
-    clockIn,
-    clockOut,
-    getAssignedBranch,
-    getSchedulesForCrew,
-    getLeaveRequestsForCrew,
-    getNotificationsForCrew,
-    crews,
-  } = useCrewStore()
 
   const [currentUser, setCurrentUser] = useState<{
-    id: number
+    id: number | string
     firstName: string
     surname: string
     status?: string
+    branchId?: string | number | null
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [todaySchedule, setTodaySchedule] = useState<any | null>(null)
   const [latestTimeRecord, setLatestTimeRecord] = useState<any | null>(null)
   const [assignedBranch, setAssignedBranch] = useState<any | null>(null)
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([])
-  const [unreadNotifications, setUnreadNotifications] = useState<any[]>([])
   const [accountStatus, setAccountStatus] = useState<"pending" | "approved" | "rejected" | undefined>(undefined)
 
-  // Demo auto-population removed so the app starts with a fresh empty state.
-  // Demo accounts remain visible on the login page but no data is auto-seeded here.
-
-  // Single useEffect to load all data at once
+  // Load all data from API endpoints
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
 
     try {
       const userData = JSON.parse(user)
       setCurrentUser(userData)
+      setAccountStatus(userData.status as any)
 
-      if (userData.id) {
-        // Get account status
-        const crew = crews.find((c) => c.id === userData.id)
-        if (crew) {
-          setAccountStatus(crew.status)
-        }
+      if (userData.status !== "approved") return
 
-        // Only load other data if account is approved
-        if (crew?.status === "approved") {
-          // Get assigned branch
-          const branch = getAssignedBranch(userData.id)
-          setAssignedBranch(branch)
-
-          // Get today's schedule
+      // Fetch all data in parallel
+      const fetchAll = async () => {
+        try {
           const today = new Date().toISOString().split("T")[0]
-          const schedules = getSchedulesForCrew(userData.id)
-          const todaySchedule = schedules.find((s) => s.date === today)
-          setTodaySchedule(todaySchedule)
 
-          // Get latest time record
-          const timeRecord = getLatestTimeRecord(userData.id)
-          setLatestTimeRecord(timeRecord)
+          const [branchRes, attendanceRes, leaveRes] = await Promise.all([
+            userData.branchId
+              ? fetch(`/api/branches?id=${userData.branchId}`).then((r) => r.ok ? r.json() : null)
+              : Promise.resolve(null),
+            fetch(`/api/attendance?employeeId=${userData.id}&date=${today}`).then((r) => r.ok ? r.json() : []),
+            fetch(`/api/leave?employeeId=${userData.id}&status=pending`).then((r) => r.ok ? r.json() : []),
+          ])
 
-          // Get pending leave requests
-          const leaveRequests = getLeaveRequestsForCrew(userData.id)
-          setPendingLeaves(leaveRequests.filter((lr) => lr.status === "pending"))
+          setAssignedBranch(branchRes)
+          setPendingLeaves(Array.isArray(leaveRes) ? leaveRes : [])
 
-          // Get unread notifications
-          const notifications = getNotificationsForCrew(userData.id)
-          setUnreadNotifications(notifications.filter((n) => !n.isRead))
+          // Find today's attendance record
+          if (Array.isArray(attendanceRes) && attendanceRes.length > 0) {
+            setLatestTimeRecord(attendanceRes[0])
+          }
+
+          // Fetch schedules and find today's
+          try {
+            const scheduleRes = await fetch(`/api/schedules?date=${today}`)
+            if (scheduleRes.ok) {
+              const schedules = await scheduleRes.json()
+              // Find this employee's schedule for today
+              if (Array.isArray(schedules)) {
+                for (const sched of schedules) {
+                  if (sched.branchAssignments) {
+                    const assignments = typeof sched.branchAssignments === "string"
+                      ? JSON.parse(sched.branchAssignments)
+                      : sched.branchAssignments
+                    if (Array.isArray(assignments)) {
+                      for (const branch of assignments) {
+                        const found = branch.employees?.find(
+                          (e: any) => String(e.employeeId) === String(userData.id)
+                        )
+                        if (found) {
+                          setTodaySchedule({
+                            date: sched.date,
+                            startTime: found.shift?.start || sched.time || "",
+                            endTime: found.shift?.end || "",
+                            branchName: branch.branchName || "Unknown",
+                            notes: sched.notes || "",
+                          })
+                          break
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Error fetching schedules:", err)
+          }
+        } catch (err) {
+          console.error("Error fetching dashboard data:", err)
         }
       }
+
+      fetchAll()
     } catch (error) {
       console.error("Error loading employee data:", error)
     }
-  }, [
-    getAssignedBranch,
-    getLatestTimeRecord,
-    getLeaveRequestsForCrew,
-    getNotificationsForCrew,
-    getSchedulesForCrew,
-    crews,
-  ])
+  }, [])
 
   const handleClockIn = async () => {
     if (!currentUser) return
 
     setIsLoading(true)
     try {
-      clockIn(currentUser.id)
-      const updatedRecord = getLatestTimeRecord(currentUser.id)
-      setLatestTimeRecord(updatedRecord)
-      showNotification("success", "Clocked In", `You have successfully clocked in at ${updatedRecord?.timeIn}`)
+      const now = new Date()
+      const today = now.toISOString().split("T")[0]
+      const timeIn = now.toTimeString().slice(0, 8)
+
+      const res = await fetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: `${currentUser.firstName} ${currentUser.surname}`,
+          date: today,
+          status: "present",
+          branchId: currentUser.branchId || null,
+        }),
+      })
+
+      if (res.ok) {
+        setLatestTimeRecord({ date: today, timeIn, status: "present" })
+        showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(timeIn)}`)
+      } else {
+        showNotification("error", "Error", "Failed to clock in. Please try again.")
+      }
     } catch (error) {
       console.error("Error clocking in:", error)
       showNotification("error", "Error", "Failed to clock in. Please try again.")
@@ -115,10 +145,31 @@ export default function EmployeeDashboard() {
 
     setIsLoading(true)
     try {
-      clockOut(currentUser.id)
-      const updatedRecord = getLatestTimeRecord(currentUser.id)
-      setLatestTimeRecord(updatedRecord)
-      showNotification("success", "Clocked Out", `You have successfully clocked out at ${updatedRecord?.timeOut}`)
+      const now = new Date()
+      const today = now.toISOString().split("T")[0]
+      const timeOut = now.toTimeString().slice(0, 8)
+
+      // Update the attendance record
+      const res = await fetch("/api/attendance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: `${currentUser.firstName} ${currentUser.surname}`,
+          date: today,
+          status: "present",
+        }),
+      })
+
+      if (res.ok) {
+        setLatestTimeRecord((prev: any) => ({
+          ...prev,
+          timeOut,
+        }))
+        showNotification("success", "Clocked Out", `You have successfully clocked out at ${formatTime(timeOut)}`)
+      } else {
+        showNotification("error", "Error", "Failed to clock out. Please try again.")
+      }
     } catch (error) {
       console.error("Error clocking out:", error)
       showNotification("error", "Error", "Failed to clock out. Please try again.")
@@ -218,12 +269,13 @@ export default function EmployeeDashboard() {
                 <div className="flex justify-between items-center">
                   <div className="text-sm text-muted-foreground">Time:</div>
                   <div className="font-medium">
-                    {formatTime(todaySchedule.startTime)} - {formatTime(todaySchedule.endTime)}
+                    {todaySchedule.startTime ? formatTime(todaySchedule.startTime) : "N/A"} -{" "}
+                    {todaySchedule.endTime ? formatTime(todaySchedule.endTime) : "N/A"}
                   </div>
                 </div>
                 <div className="flex justify-between items-center">
                   <div className="text-sm text-muted-foreground">Branch:</div>
-                  <div className="font-medium">{assignedBranch?.branchName || "Unassigned"}</div>
+                  <div className="font-medium">{todaySchedule.branchName || assignedBranch?.branchName || "Unassigned"}</div>
                 </div>
                 {todaySchedule.notes && (
                   <div className="pt-2 border-t">
@@ -250,17 +302,19 @@ export default function EmployeeDashboard() {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div className="text-sm text-muted-foreground">Status:</div>
-                <Badge variant={latestTimeRecord && !latestTimeRecord.timeOut ? "default" : "outline"}>
-                  {latestTimeRecord && !latestTimeRecord.timeOut ? "Clocked In" : "Not Clocked In"}
+                <Badge variant={latestTimeRecord && latestTimeRecord.status === "present" ? "default" : "outline"}>
+                  {latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In"}
                 </Badge>
               </div>
 
               {latestTimeRecord && (
                 <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <div className="text-sm text-muted-foreground">Time In:</div>
-                    <div className="font-medium">{formatTime(latestTimeRecord.timeIn)}</div>
-                  </div>
+                  {latestTimeRecord.timeIn && (
+                    <div className="flex justify-between items-center">
+                      <div className="text-sm text-muted-foreground">Time In:</div>
+                      <div className="font-medium">{formatTime(latestTimeRecord.timeIn)}</div>
+                    </div>
+                  )}
 
                   {latestTimeRecord.timeOut && (
                     <div className="flex justify-between items-center">
@@ -272,7 +326,7 @@ export default function EmployeeDashboard() {
               )}
 
               <div className="pt-2">
-                {!latestTimeRecord || latestTimeRecord.timeOut ? (
+                {!latestTimeRecord || latestTimeRecord.status !== "present" ? (
                   <Button className="w-full" onClick={handleClockIn} disabled={isLoading}>
                     Clock In
                   </Button>
@@ -316,17 +370,16 @@ export default function EmployeeDashboard() {
           <CardContent>
             {pendingLeaves.length > 0 ? (
               <div className="space-y-4">
-                {pendingLeaves.map((leave) => (
-                  <div key={leave.id} className="p-3 border rounded-md">
+                {pendingLeaves.map((leave: any, idx: number) => (
+                  <div key={leave.id || idx} className="p-3 border rounded-md">
                     <div className="flex justify-between">
-                      <div className="font-medium">
-                        {leave.type.charAt(0).toUpperCase() + leave.type.slice(1)} Leave
+                      <div className="font-medium capitalize">
+                        {leave.type || "General"} Leave
                       </div>
                       <Badge variant="outline">Pending</Badge>
                     </div>
                     <div className="text-sm text-muted-foreground mt-1">
-                      {format(parseISO(leave.startDate), "MMM d, yyyy")} -{" "}
-                      {format(parseISO(leave.endDate), "MMM d, yyyy")}
+                      {leave.startDate} — {leave.endDate}
                     </div>
                     {leave.reason && (
                       <div className="mt-2 text-sm">
@@ -343,39 +396,27 @@ export default function EmployeeDashboard() {
           </CardContent>
         </Card>
 
-        {/* Recent Notifications */}
+        {/* Info Card */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-lg flex items-center">
               <AlertCircle className="mr-2 h-5 w-5 text-primary" />
-              Recent Notifications
+              Quick Info
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {unreadNotifications.length > 0 ? (
-              <div className="space-y-4">
-                {unreadNotifications.slice(0, 3).map((notification) => (
-                  <div key={notification.id} className="p-3 border rounded-md">
-                    <div className="font-medium">{notification.title}</div>
-                    <div className="text-sm mt-1">{notification.message}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {format(parseISO(notification.createdAt), "MMM d, yyyy h:mm a")}
-                    </div>
-                  </div>
-                ))}
-                {unreadNotifications.length > 3 && (
-                  <Button
-                    variant="link"
-                    className="w-full"
-                    onClick={() => (window.location.href = "/employee/notifications")}
-                  >
-                    View all notifications
-                  </Button>
-                )}
+            <div className="space-y-4">
+              <div className="p-3 border rounded-md">
+                <div className="font-medium">Today</div>
+                <div className="text-sm mt-1">{format(new Date(), "EEEE, MMMM d, yyyy")}</div>
               </div>
-            ) : (
-              <div className="py-6 text-center text-muted-foreground">No unread notifications</div>
-            )}
+              {assignedBranch && (
+                <div className="p-3 border rounded-md">
+                  <div className="font-medium">Your Branch</div>
+                  <div className="text-sm mt-1">{assignedBranch.branchName}</div>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -1,26 +1,31 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useCrewStore } from "@/lib/cleanStore"
-import { format, startOfWeek, endOfWeek, eachDayOfInterval, subWeeks, addWeeks, parseISO } from "date-fns"
+import { format, startOfWeek, endOfWeek, eachDayOfInterval, subWeeks, addWeeks } from "date-fns"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 
+interface EmployeeShift {
+  date: string
+  startTime: string
+  endTime: string
+  branchName: string
+  branchId: string
+  notes?: string
+}
+
 export default function EmployeeSchedulePage() {
-  const { getSchedulesForCrew, branches } = useCrewStore()
-  const [currentUser, setCurrentUser] = useState<{ id: number } | null>(null)
+  const [currentUser, setCurrentUser] = useState<{ id: number | string } | null>(null)
   const [currentDate, setCurrentDate] = useState(new Date())
-  const [weekSchedules, setWeekSchedules] = useState<any[]>([])
+  const [weekSchedules, setWeekSchedules] = useState<EmployeeShift[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Demo auto-population removed so the app starts with an empty store and no local mock data.
-
-  // Memoize date calculations to prevent recalculation on every render
+  // Memoize date calculations
   const { startOfCurrentWeek, endOfCurrentWeek, weekDays } = useMemo(() => {
-    const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 }) // Start on Monday
+    const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 })
     const endOfWeekDate = endOfWeek(currentDate, { weekStartsOn: 1 })
 
     const days = eachDayOfInterval({
@@ -35,26 +40,10 @@ export default function EmployeeSchedulePage() {
     }
   }, [currentDate])
 
-  // Memoize the getBranchName function to prevent unnecessary re-renders
-  const getBranchName = useCallback(
-    (branchId: number) => {
-      try {
-        const branch = branches.find((b) => b.id === branchId)
-        return branch ? branch.branchName : "Unknown Branch"
-      } catch (error) {
-        console.error("Error getting branch name:", error)
-        return "Unknown Branch"
-      }
-    },
-    [branches],
-  )
-
-  // First effect to get the current user - runs only once
+  // Load current user
   useEffect(() => {
-    // Get current user from session storage
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
-
     try {
       const userData = JSON.parse(user)
       setCurrentUser(userData)
@@ -64,42 +53,63 @@ export default function EmployeeSchedulePage() {
     }
   }, [])
 
-  // Demo auto-population removed so the app starts with an empty store and no local mock data.
-
-  // Second effect to fetch schedules - runs when currentUser or currentDate changes
+  // Fetch schedules for the current week from API
   useEffect(() => {
     if (!currentUser?.id) return
 
     setIsLoading(true)
     setError(null)
 
-    try {
-      // Get all schedules for the crew member
-      const allSchedules = getSchedulesForCrew(currentUser.id)
+    const fetchSchedules = async () => {
+      try {
+        const weekStartStr = format(startOfCurrentWeek, "yyyy-MM-dd")
+        const res = await fetch(`/api/schedules?weekStart=${weekStartStr}`)
 
-      // Filter schedules for the current week
-      const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 })
-      const endOfWeekDate = endOfWeek(currentDate, { weekStartsOn: 1 })
-
-      const filteredSchedules = allSchedules.filter((schedule) => {
-        try {
-          const scheduleDate = new Date(schedule.date)
-          return scheduleDate >= startOfWeekDate && scheduleDate <= endOfWeekDate
-        } catch (error) {
-          console.error("Error filtering schedule:", error)
-          return false
+        if (!res.ok) {
+          throw new Error("Failed to fetch schedules")
         }
-      })
 
-  setWeekSchedules(filteredSchedules)
-    } catch (error) {
-      console.error("Error loading schedule data:", error)
-      setError("Failed to load schedule data. Please try again.")
-      setWeekSchedules([])
-    } finally {
-      setIsLoading(false)
+        const schedules = await res.json()
+        const employeeShifts: EmployeeShift[] = []
+
+        if (Array.isArray(schedules)) {
+          for (const sched of schedules) {
+            const assignments = typeof sched.branchAssignments === "string"
+              ? JSON.parse(sched.branchAssignments)
+              : sched.branchAssignments
+
+            if (Array.isArray(assignments)) {
+              for (const branch of assignments) {
+                const found = branch.employees?.find(
+                  (e: any) => String(e.employeeId) === String(currentUser.id)
+                )
+                if (found) {
+                  employeeShifts.push({
+                    date: sched.date,
+                    startTime: found.shift?.start || sched.time || "",
+                    endTime: found.shift?.end || "",
+                    branchName: branch.branchName || "Unknown Branch",
+                    branchId: branch.branchId || "",
+                    notes: sched.notes,
+                  })
+                }
+              }
+            }
+          }
+        }
+
+        setWeekSchedules(employeeShifts)
+      } catch (error) {
+        console.error("Error loading schedule data:", error)
+        setError("Failed to load schedule data. Please try again.")
+        setWeekSchedules([])
+      } finally {
+        setIsLoading(false)
+      }
     }
-  }, [currentUser, currentDate, getSchedulesForCrew])
+
+    fetchSchedules()
+  }, [currentUser, startOfCurrentWeek])
 
   const handlePreviousWeek = () => {
     setCurrentDate(subWeeks(currentDate, 1))
@@ -115,27 +125,20 @@ export default function EmployeeSchedulePage() {
 
   const formatTime = (timeString: string) => {
     if (!timeString) return "N/A"
-
     try {
       const [hours, minutes] = timeString.split(":")
       const hour = Number.parseInt(hours, 10)
       const period = hour >= 12 ? "PM" : "AM"
       const formattedHour = hour % 12 || 12
       return `${formattedHour}:${minutes} ${period}`
-    } catch (error) {
-      console.error("Error formatting time:", error)
+    } catch {
       return "N/A"
     }
   }
 
   const getScheduleForDay = (date: Date) => {
-    try {
-      const dateString = format(date, "yyyy-MM-dd")
-      return weekSchedules.find((schedule) => schedule.date === dateString)
-    } catch (error) {
-      console.error("Error getting schedule for day:", error)
-      return undefined
-    }
+    const dateString = format(date, "yyyy-MM-dd")
+    return weekSchedules.find((s) => s.date === dateString)
   }
 
   const isToday = (date: Date) => {
@@ -147,7 +150,6 @@ export default function EmployeeSchedulePage() {
     )
   }
 
-  // Show loading state
   if (isLoading && !weekSchedules.length) {
     return (
       <div className="space-y-8">
@@ -165,7 +167,6 @@ export default function EmployeeSchedulePage() {
     )
   }
 
-  // Show error state
   if (error) {
     return (
       <div className="space-y-8">
@@ -223,10 +224,10 @@ export default function EmployeeSchedulePage() {
                 {getScheduleForDay(day) ? (
                   <div className="space-y-2">
                     <div className="text-sm font-medium">
-                      {formatTime(getScheduleForDay(day)?.startTime)} - {formatTime(getScheduleForDay(day)?.endTime)}
+                      {formatTime(getScheduleForDay(day)!.startTime)} - {formatTime(getScheduleForDay(day)!.endTime)}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {getBranchName(getScheduleForDay(day)?.branchId)}
+                      {getScheduleForDay(day)!.branchName}
                     </div>
                     {getScheduleForDay(day)?.notes && (
                       <div className="text-xs mt-2 pt-2 border-t">{getScheduleForDay(day)?.notes}</div>
@@ -250,17 +251,17 @@ export default function EmployeeSchedulePage() {
             <div className="space-y-4">
               {weekSchedules
                 .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                .map((schedule) => (
-                  <div key={schedule.id} className="flex justify-between items-center p-4 border rounded-md">
+                .map((schedule, idx) => (
+                  <div key={idx} className="flex justify-between items-center p-4 border rounded-md">
                     <div>
-                      <div className="font-medium">{format(parseISO(schedule.date), "EEEE, MMMM d, yyyy")}</div>
+                      <div className="font-medium">{format(new Date(schedule.date + "T00:00:00"), "EEEE, MMMM d, yyyy")}</div>
                       <div className="text-sm text-muted-foreground">
                         {formatTime(schedule.startTime)} - {formatTime(schedule.endTime)}
                       </div>
-                      <div className="text-sm mt-1">{getBranchName(schedule.branchId)}</div>
+                      <div className="text-sm mt-1">{schedule.branchName}</div>
                     </div>
-                    <Badge variant={isToday(parseISO(schedule.date)) ? "default" : "outline"}>
-                      {isToday(parseISO(schedule.date)) ? "Today" : format(parseISO(schedule.date), "EEE")}
+                    <Badge variant={isToday(new Date(schedule.date + "T00:00:00")) ? "default" : "outline"}>
+                      {isToday(new Date(schedule.date + "T00:00:00")) ? "Today" : format(new Date(schedule.date + "T00:00:00"), "EEE")}
                     </Badge>
                   </div>
                 ))}
