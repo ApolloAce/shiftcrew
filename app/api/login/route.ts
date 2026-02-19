@@ -16,8 +16,8 @@ export async function POST(req: Request) {
 
   try {
     const rows = await query(
-      "SELECT * FROM users WHERE email = ? LIMIT 1",
-      [identifier]
+      "SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(firstName) = ? LIMIT 1",
+      [identifier, identifier]
     );
 
     if (rows.length === 0) {

@@ -157,8 +157,8 @@ export default function LoginPage() {
             <p className="font-medium mb-2">Demo Accounts:</p>
             <ul className="list-disc pl-5 space-y-1">
               <li>Admin: admin / admin123</li>
-              <li>Manager: manager / manager123</li>
               <li>Employee: luis / luis123</li>
+              <li>Employee: jane@shiftmate.com / password123</li>
             </ul>
           </div>
         </CardFooter>
