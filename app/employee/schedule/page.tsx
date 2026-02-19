@@ -53,16 +53,20 @@ export default function EmployeeSchedulePage() {
     }
   }, [])
 
+  // Compute week start as a string for stable dependency comparison
+  const weekStartStr = useMemo(() => format(startOfCurrentWeek, "yyyy-MM-dd"), [startOfCurrentWeek])
+
   // Fetch schedules for the current week from API
   useEffect(() => {
     if (!currentUser?.id) return
 
+    // Clear old data immediately so stale schedules don't show
+    setWeekSchedules([])
     setIsLoading(true)
     setError(null)
 
     const fetchSchedules = async () => {
       try {
-        const weekStartStr = format(startOfCurrentWeek, "yyyy-MM-dd")
         const res = await fetch(`/api/schedules?weekStart=${weekStartStr}`)
 
         if (!res.ok) {
@@ -112,7 +116,7 @@ export default function EmployeeSchedulePage() {
     }
 
     fetchSchedules()
-  }, [currentUser, startOfCurrentWeek])
+  }, [currentUser, weekStartStr])
 
   const handlePreviousWeek = () => {
     setCurrentDate(subWeeks(currentDate, 1))
