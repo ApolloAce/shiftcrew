@@ -74,9 +74,10 @@ export default function EmployeeSchedulePage() {
 
         if (Array.isArray(schedules)) {
           for (const sched of schedules) {
-            const assignments = typeof sched.branchAssignments === "string"
-              ? JSON.parse(sched.branchAssignments)
-              : sched.branchAssignments
+            let assignments = sched.branchAssignments
+            if (typeof assignments === "string") {
+              try { assignments = JSON.parse(assignments) } catch { assignments = null }
+            }
 
             if (Array.isArray(assignments)) {
               for (const branch of assignments) {

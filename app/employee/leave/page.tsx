@@ -273,7 +273,7 @@ export default function EmployeeLeavePage() {
           {leaveRequests.length > 0 ? (
             <div className="space-y-4">
               {leaveRequests
-                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
                 .map((request, idx) => {
                   const startDate = new Date(request.startDate + "T00:00:00")
                   const endDate = new Date(request.endDate + "T00:00:00")

@@ -22,7 +22,6 @@ async function seed() {
     const luisHash = await bcrypt.hash("luis123", 10);
     const defaultHash = await bcrypt.hash("password123", 10);
 
-    // ---- Admin user ----
     await upsertUser({
         id: "admin-001",
         firstName: "Admin",
@@ -38,7 +37,7 @@ async function seed() {
     });
     console.log("  ✅ Admin user (admin / admin123)");
 
-    // ---- Luis (employee) ----
+
     await upsertUser({
         id: "emp-luis",
         firstName: "Luis",

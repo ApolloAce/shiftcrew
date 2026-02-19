@@ -67,9 +67,10 @@ export default function EmployeeDashboard() {
               if (Array.isArray(schedules)) {
                 for (const sched of schedules) {
                   if (sched.branchAssignments) {
-                    const assignments = typeof sched.branchAssignments === "string"
-                      ? JSON.parse(sched.branchAssignments)
-                      : sched.branchAssignments
+                    let assignments = sched.branchAssignments
+                    if (typeof assignments === "string") {
+                      try { assignments = JSON.parse(assignments) } catch { assignments = null }
+                    }
                     if (Array.isArray(assignments)) {
                       for (const branch of assignments) {
                         const found = branch.employees?.find(
