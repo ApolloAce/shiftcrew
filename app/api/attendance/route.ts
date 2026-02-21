@@ -48,7 +48,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const docId = `${body.employeeId}_${body.date}`;
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     await execute(
       `INSERT INTO daily_attendance (id, employeeId, employeeName, date, status, branchId, branchName, createdAt, updatedAt)

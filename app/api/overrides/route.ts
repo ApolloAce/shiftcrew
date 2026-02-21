@@ -53,7 +53,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     const dayOfWeek = body.dayOfWeek || getDayOfWeekName(body.date);
 
@@ -101,7 +101,7 @@ export async function PUT(req: Request) {
     }
 
     setClauses.push("updatedAt = ?");
-    params.push(new Date().toISOString());
+    params.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
     params.push(id);
 
     await execute(`UPDATE manual_overrides SET ${setClauses.join(", ")} WHERE id = ?`, params);

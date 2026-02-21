@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     await execute(
       `INSERT INTO users (id, firstName, surname, nickname, email, passwordHash, phone, address, emergencyContact, position, type, availability, isPresent, isEmployee, archived, role, status, branchId, hireDate, createdAt, updatedAt)
@@ -90,7 +90,7 @@ export async function PUT(req: Request) {
     }
 
     setClauses.push("updatedAt = ?");
-    params.push(new Date().toISOString());
+    params.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
     params.push(id);
 
     await execute(`UPDATE users SET ${setClauses.join(", ")} WHERE id = ?`, params);

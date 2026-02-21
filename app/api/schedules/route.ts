@@ -39,7 +39,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     // Check if schedule already exists for this date (+ scheduleFor combo)
     let existing: any[] = [];
@@ -118,7 +118,7 @@ export async function PUT(req: Request) {
     const { id, assignments, branchAssignments } = body;
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
 
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     // If branchAssignments are provided, save both columns
     if (branchAssignments) {

@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     // Hash password before saving
     const passwordHash = await bcrypt.hash(formData.password, 10);
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     await execute(
       `INSERT INTO users (id, firstName, surname, nickname, email, passwordHash, phone, address, type, availability, isPresent, isEmployee, archived, status, role, hireDate, createdAt, updatedAt)

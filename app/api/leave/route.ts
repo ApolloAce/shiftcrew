@@ -39,7 +39,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     await execute(
       `INSERT INTO leave_requests (id, employeeId, employeeName, startDate, endDate, reason, status, type, notes, createdAt)
@@ -81,7 +81,7 @@ export async function PUT(req: Request) {
     }
 
     setClauses.push("reviewedAt = ?");
-    params.push(new Date().toISOString());
+    params.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
     params.push(id);
 
     await execute(`UPDATE leave_requests SET ${setClauses.join(", ")} WHERE id = ?`, params);
