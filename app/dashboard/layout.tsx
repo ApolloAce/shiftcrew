@@ -30,15 +30,20 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     try {
       const userData = JSON.parse(user)
 
-      // Check if the user is an admin
-      if (!userData.isAdmin) {
+      // Check if the user is an admin (check both isAdmin flag and role field)
+      if (!userData.isAdmin && userData.role !== "admin") {
         // Not an admin user, redirect to appropriate page
-        if (userData.isEmployee) {
+        if (userData.isEmployee || userData.role === "employee") {
           router.push("/employee")
         } else {
           router.push("/")
         }
         return
+      }
+
+      // Ensure name is available for display (derive from firstName/surname if missing)
+      if (!userData.name && (userData.firstName || userData.surname)) {
+        userData.name = `${userData.firstName || ""} ${userData.surname || ""}`.trim()
       }
 
       setCurrentUser(userData)

@@ -31,15 +31,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid username or password" }, { status: 401 });
     }
 
+    const isAdmin = userDoc.role === "admin";
     const userData = {
       id: userDoc.id,
       firstName: userDoc.firstName,
       surname: userDoc.surname,
+      name: `${userDoc.firstName || ""} ${userDoc.surname || ""}`.trim(),
       email: userDoc.email,
       role: userDoc.role,
       type: userDoc.type || "full-time",
-      isAdmin: userDoc.role === "admin",
-      isEmployee: userDoc.role === "employee" || !!userDoc.isEmployee,
+      isAdmin,
+      // Ensure isEmployee is false for admins to prevent routing ambiguity
+      isEmployee: !isAdmin && (userDoc.role === "employee" || !!userDoc.isEmployee),
       status: userDoc.status || "approved",
       branchId: userDoc.branchId || null,
     };

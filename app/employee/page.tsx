@@ -114,26 +114,97 @@ export default function EmployeeDashboard() {
     try {
       // Step 1: Capture photo for attendance verification
       let photoDataUrl: string | null = null
+
+      // Check if getUserMedia is available (requires HTTPS except on localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
+        setIsLoading(false)
+        return
+      }
+
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-          audio: false,
-        })
+        // Try front camera first, fall back to any camera if facingMode is not supported
+        let stream: MediaStream
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+            audio: false,
+          })
+        } catch (constraintError: any) {
+          // Fallback: request any available camera without facingMode constraint
+          if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+          } else {
+            throw constraintError
+          }
+        }
+
         const video = document.createElement("video")
+        video.setAttribute("autoplay", "")
+        video.setAttribute("playsinline", "") // Required for iOS Safari
+        video.setAttribute("muted", "")
+        video.muted = true
         video.srcObject = stream
-        video.play()
-        await new Promise((resolve) => { video.onloadedmetadata = resolve })
-        // Small delay to let camera warm up
-        await new Promise((resolve) => setTimeout(resolve, 500))
+
+        // Wait for video to have actual frame data available (not just metadata)
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
+          video.onloadeddata = () => {
+            clearTimeout(timeout)
+            resolve()
+          }
+          video.onerror = () => {
+            clearTimeout(timeout)
+            reject(new Error("Video element error"))
+          }
+        })
+
+        // Await play() — this returns a Promise that can reject
+        await video.play()
+
+        // Wait for camera to deliver a real frame (warm-up period)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+
+        // Verify video dimensions are valid before capturing
+        if (!video.videoWidth || !video.videoHeight) {
+          stream.getTracks().forEach((track) => track.stop())
+          showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again or use a different device.")
+          setIsLoading(false)
+          return
+        }
+
         const canvas = document.createElement("canvas")
         canvas.width = video.videoWidth
         canvas.height = video.videoHeight
         const ctx = canvas.getContext("2d")
-        ctx?.drawImage(video, 0, 0)
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        }
         photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
+
+        // Stop all camera tracks immediately after capture
         stream.getTracks().forEach((track) => track.stop())
-      } catch (cameraError) {
-        showNotification("error", "Camera Required", "Photo-based attendance is required. Please allow camera access to clock in.")
+      } catch (cameraError: any) {
+        // Provide specific error messages based on the error type
+        let title = "Camera Error"
+        let message = "Could not access camera. Please try again."
+
+        if (cameraError.name === "NotAllowedError" || cameraError.name === "PermissionDeniedError") {
+          title = "Camera Permission Denied"
+          message = "Camera access was denied. Please allow camera permissions in your browser settings and try again."
+        } else if (cameraError.name === "NotFoundError" || cameraError.name === "DevicesNotFoundError") {
+          title = "No Camera Found"
+          message = "No camera was detected on this device. Please connect a camera and try again."
+        } else if (cameraError.name === "NotReadableError" || cameraError.name === "TrackStartError") {
+          title = "Camera In Use"
+          message = "The camera is already in use by another application. Please close other apps using the camera and try again."
+        } else if (cameraError.message === "Camera timed out") {
+          title = "Camera Timeout"
+          message = "Camera took too long to start. Please check your camera connection and try again."
+        }
+
+        console.error("Camera error:", cameraError.name, cameraError.message)
+        showNotification("error", title, message)
         setIsLoading(false)
         return
       }

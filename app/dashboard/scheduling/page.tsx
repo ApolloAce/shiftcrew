@@ -140,10 +140,15 @@ export default function SchedulingPage() {
         const apiBranch = fireBranches.find((b: any) => String(b.id) === String(c.branchId))
         currentBranchName = apiBranch ? (apiBranch.branchName || apiBranch.name) : "Unassigned"
       }
-      const idForPreview = matchedStoreCrew ? matchedStoreCrew.id : (c.id ?? `fire-${idx}`)
+      // Always use the source employee's own ID as the canonical key so it matches
+      // manualAssignments keys (which are Firestore string IDs). Keep the store crew
+      // ID as a secondary reference for backward-compatible assignCrewToBranch calls.
+      const canonicalId = c.id ?? `fire-${idx}`
+      const storeCrewId = matchedStoreCrew ? matchedStoreCrew.id : null
 
       return {
-        id: idForPreview,
+        id: canonicalId,
+        storeCrewId,
         firstName: c.firstName,
         surname: c.surname,
         email: c.email,
@@ -505,9 +510,11 @@ export default function SchedulingPage() {
           || branches.find((b: any) => b.branchName === emp.nextWeekBranch)
         if (targetBranch) {
           // update in-memory store assignment (keeps other app logic working)
+          // Use storeCrewId (numeric) if available since the Zustand store expects numeric IDs
           try {
-            assignCrewToBranch(emp.id, targetBranch.id)
-            console.log("[Regenerate] Assigned crew", emp.id, "to branch", targetBranch.id)
+            const storeId = emp.storeCrewId ?? emp.id
+            assignCrewToBranch(storeId, targetBranch.id)
+            console.log("[Regenerate] Assigned crew", storeId, "to branch", targetBranch.id)
           } catch (e) {
             console.warn("[Regenerate] assignCrewToBranch failed for", emp.id, targetBranch.id, e)
           }
@@ -611,6 +618,10 @@ export default function SchedulingPage() {
 
       // Refresh the week schedules display
       await fetchWeekSchedulesFromFirestore()
+
+      // Generate a next-week preview so the "Next Week's Rotation" card is populated
+      const nextWeekPreview = generateRotation({ avoidSameBranch: true })
+      setNextWeekRotationPreview(nextWeekPreview)
 
       // auto-clear undo after 10 seconds
       setTimeout(() => {
@@ -1681,7 +1692,9 @@ export default function SchedulingPage() {
                         console.log("[Apply Rotation Button] Added assignment:", employeeName, "->", branchName)
 
                         // Also update current assignment so the applied preview becomes the current rotation
-                        assignCrewToBranch(emp.id, targetBranch.id)
+                        // Use storeCrewId (numeric) if available since the Zustand store expects numeric IDs
+                        const storeId = emp.storeCrewId ?? emp.id
+                        assignCrewToBranch(storeId, targetBranch.id)
                       } else {
                         console.warn("[Apply Rotation Button] No matching branch found for:", emp.nextWeekBranch)
                       }
@@ -1762,6 +1775,10 @@ export default function SchedulingPage() {
                       console.error("Error refreshing employees after rotation:", err)
                     }
                     await fetchWeekSchedulesFromFirestore()
+
+                    // Generate a next-week preview so the "Next Week's Rotation" card is populated
+                    const nextWeekPreview = generateRotation({ avoidSameBranch: true })
+                    setNextWeekRotationPreview(nextWeekPreview)
 
                     showNotification("success", "Rotation Applied", "Next week's rotation has been scheduled and set as the current rotation.")
                     setShowRotationPreview(false)
