@@ -41,6 +41,17 @@ export async function POST(req: Request) {
       ]
     );
 
+    // Create a welcome notification for the new employee
+    try {
+      const notifId = crypto.randomUUID();
+      await execute(
+        `INSERT INTO notifications (id, recipientId, title, message, type, isRead, createdAt) VALUES (?, ?, ?, ?, ?, 0, ?)`,
+        [notifId, id, "Welcome to ShiftCrew", `Your account has been created successfully. Welcome, ${formData.firstName}!`, "success", now]
+      );
+    } catch (notifErr) {
+      console.warn("Failed to create welcome notification:", notifErr);
+    }
+
     return NextResponse.json({
       id,
       firstName: formData.firstName,

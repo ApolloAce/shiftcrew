@@ -50,12 +50,19 @@ export async function PUT(req: Request) {
     const { id, ...updates } = body;
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
 
+    // Filter out read-only / auto-managed fields to prevent duplicate SET clauses
+    const allowedFields = ["branchName", "address"];
     const setClauses: string[] = [];
     const params: any[] = [];
 
     for (const [key, value] of Object.entries(updates)) {
+      if (!allowedFields.includes(key)) continue;
       setClauses.push(`\`${key}\` = ?`);
       params.push(value);
+    }
+
+    if (setClauses.length === 0) {
+      return NextResponse.json({ message: "No valid fields to update" }, { status: 400 });
     }
 
     setClauses.push("updatedAt = ?");

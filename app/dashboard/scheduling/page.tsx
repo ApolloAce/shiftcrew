@@ -288,6 +288,20 @@ export default function SchedulingPage() {
         setFireBranches(b)
         setFireEmployees(e)
         console.log("Firestore branches/employees loaded:", b.length, e.length)
+
+        // Initialize manualAssignments from employees' persisted branchId
+        const initialAssignments: Record<string, string> = {}
+        for (const emp of e) {
+          if (emp.branchId) {
+            const branch = b.find((br: any) => String(br.id) === String(emp.branchId))
+            if (branch) {
+              initialAssignments[String(emp.id)] = branch.branchName
+            }
+          }
+        }
+        if (Object.keys(initialAssignments).length > 0) {
+          setManualAssignments((prev) => ({ ...initialAssignments, ...prev }))
+        }
       } catch (err) {
         console.error("Error loading Firestore scheduling data:", err)
       }
@@ -447,19 +461,8 @@ export default function SchedulingPage() {
     fetchCurrentWeekSchedule()
   }, [])
 
-  // Generate next week's rotation preview (auto-updates when week changes or data changes)
-  useEffect(() => {
-    const generateNextWeekPreview = () => {
-      const preview = generateRotation({ avoidSameBranch: true })
-      setNextWeekRotationPreview(preview)
-    }
-
-    generateNextWeekPreview()
-
-    // Update preview daily to catch week changes
-    const interval = setInterval(generateNextWeekPreview, 60000) // Update every minute
-    return () => clearInterval(interval)
-  }, [crews.length, branchesList.length, fireEmployees.length])
+  // Next week rotation preview is generated only when the user explicitly clicks
+  // "Generate New Rotation" and confirms. No auto-generation.
 
   // Wrapped regenerate so we can show feedback and ensure UI updates
   const handleRegenerate = async () => {
@@ -653,7 +656,7 @@ export default function SchedulingPage() {
     )
   }
 
-  const handleAssignCrewFirestore = (crewId: string | number, branchId: string, employee: any) => {
+  const handleAssignCrewFirestore = async (crewId: string | number, branchId: string, employee: any) => {
     if (branchId) {
       const branch = branchId === "unassigned" ? null : fireBranches.find((b) => String(b.id) === branchId)
 
@@ -664,6 +667,17 @@ export default function SchedulingPage() {
           delete copy[String(employee.id)]
           return copy
         })
+
+        // Persist unassignment to DB
+        try {
+          await fetch("/api/employees", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: String(employee.id), branchId: null }),
+          })
+        } catch (err) {
+          console.error("Error persisting unassignment:", err)
+        }
 
         showNotification(
           "info",
@@ -678,6 +692,17 @@ export default function SchedulingPage() {
         } else {
           // Fallback: use branchId string if branch name unavailable
           setManualAssignments((prev) => ({ ...prev, [String(employee.id)]: String(branchId) }))
+        }
+
+        // Persist assignment to DB (users.branchId)
+        try {
+          await fetch("/api/employees", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: String(employee.id), branchId: String(branchId) }),
+          })
+        } catch (err) {
+          console.error("Error persisting branch assignment:", err)
         }
 
         // Try to find matching store crew and assign via store for backward compatibility
@@ -1060,15 +1085,7 @@ export default function SchedulingPage() {
 
               <div className="flex gap-2">
                 <Button
-                  onClick={() => {
-                    // Generate a new rotation from the current schedule and open the dialog.
-                    const next = generateRotation({ avoidSameBranch: true })
-                    setRotatedEmployees(next)
-                    setShowRotationPreview(true)
-                    if (!next || next.length === 0) {
-                      showNotification("info", "No Rotation Generated", "No rotation generated. Ensure branches and crews exist.")
-                    }
-                  }}
+                  onClick={handleRegenerate}
                   disabled={branchesList.length === 0 || crews.length === 0}
                 >
                   Generate New Rotation
@@ -1731,14 +1748,19 @@ export default function SchedulingPage() {
                       }
                     }
 
-                    // Clear preview/manual overrides after applying so Preview is reset
+                    // Clear preview after applying (but keep manualAssignments — they are DB-persisted)
                     setRotatedEmployees([])
-                    setManualAssignments({})
 
                     // Store the applied rotation to display in Current Schedules card
                     setAppliedRotation(rotatedEmployees)
 
-                    // Refresh the week schedules display
+                    // Refresh employee data and week schedules from DB
+                    try {
+                      const updatedEmployees = await getEmployeesFromFirestore()
+                      setFireEmployees(updatedEmployees)
+                    } catch (err) {
+                      console.error("Error refreshing employees after rotation:", err)
+                    }
                     await fetchWeekSchedulesFromFirestore()
 
                     showNotification("success", "Rotation Applied", "Next week's rotation has been scheduled and set as the current rotation.")
@@ -1751,6 +1773,26 @@ export default function SchedulingPage() {
             </DialogContent>
           </Dialog>
         </TabsContent>
+
+        {/* Regenerate Confirmation Dialog */}
+        <Dialog open={showRegenerateConfirm} onOpenChange={setShowRegenerateConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Generate New Rotation?</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground py-2">
+              Are you sure you want to generate a new rotation? This will create a new crew rotation for the current week and replace any existing schedule.
+            </p>
+            <div className="flex justify-end gap-2 pt-4 border-t">
+              <Button variant="outline" onClick={() => setShowRegenerateConfirm(false)}>
+                Cancel
+              </Button>
+              <Button onClick={confirmRegenerate}>
+                Yes, Generate
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <TabsContent value="manual" className="space-y-6">
           <div className="relative mb-4">
@@ -1772,10 +1814,34 @@ export default function SchedulingPage() {
                 <div className="flex items-center gap-2 mt-3">
                   <Button
                     size="sm"
-                    onClick={() => {
+                    onClick={async () => {
                       setManualAssignments((prev) => ({ ...prev, ...pendingAssignments }))
+
+                      // Persist each pending assignment to the users table (branchId) so it survives page reloads
+                      for (const [employeeId, branchName] of Object.entries(pendingAssignments)) {
+                        const branch = fireBranches.find((b: any) => b.branchName === branchName)
+                        if (branch) {
+                          try {
+                            await fetch("/api/employees", {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ id: employeeId, branchId: String(branch.id) }),
+                            })
+                          } catch (err) {
+                            console.error("Error persisting branch assignment for", employeeId, err)
+                          }
+                        }
+                      }
+
                       setPendingAssignments({})
-                      showNotification("success", "Selections Saved", "Pending selections have been confirmed and will show on branch cards.")
+                      // Refresh employee data to reflect persisted assignments
+                      try {
+                        const updatedEmployees = await getEmployeesFromFirestore()
+                        setFireEmployees(updatedEmployees)
+                      } catch (err) {
+                        console.error("Error refreshing employees:", err)
+                      }
+                      showNotification("success", "Selections Saved", "Pending selections have been confirmed and persisted.")
                     }}
                   >
                     Confirm Selections

@@ -116,6 +116,21 @@ CREATE TABLE IF NOT EXISTS absences (
 ) ENGINE=InnoDB;
 
 -- ============================================================
+-- NOTIFICATIONS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id           VARCHAR(64)  NOT NULL PRIMARY KEY DEFAULT (UUID()),
+  recipientId  VARCHAR(64)  DEFAULT NULL,
+  title        VARCHAR(255) NOT NULL,
+  message      TEXT         NOT NULL,
+  type         VARCHAR(50)  DEFAULT 'info',
+  isRead       TINYINT(1)   NOT NULL DEFAULT 0,
+  createdAt    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_notifications_recipient (recipientId),
+  INDEX idx_notifications_read (isRead)
+) ENGINE=InnoDB;
+
+-- ============================================================
 -- MANUAL OVERRIDES
 -- ============================================================
 CREATE TABLE IF NOT EXISTS manual_overrides (

@@ -104,6 +104,32 @@ export async function POST(req: Request) {
       ]
     );
 
+    // Create shift assignment notifications for each employee in the schedule
+    if (body.assignments && Array.isArray(body.assignments)) {
+      const scheduleDate = body.scheduleFor || body.date;
+      for (const assignment of body.assignments) {
+        if (assignment.employeeId) {
+          try {
+            const notifId = crypto.randomUUID();
+            await execute(
+              `INSERT INTO notifications (id, recipientId, title, message, type, isRead, createdAt) VALUES (?, ?, ?, ?, ?, 0, ?)`,
+              [
+                notifId,
+                assignment.employeeId,
+                "Shift Assigned",
+                `You have been assigned to ${assignment.branchName || "a branch"} on ${scheduleDate}.`,
+                "info",
+                now,
+              ]
+            );
+          } catch (notifErr) {
+            // Non-critical — don't fail the schedule save
+            console.warn("Failed to create shift notification for", assignment.employeeId, notifErr);
+          }
+        }
+      }
+    }
+
     return NextResponse.json({ id }, { status: 201 });
   } catch (error: any) {
     console.error("POST /api/schedules error:", error);

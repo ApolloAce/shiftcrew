@@ -5,18 +5,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
-import { useCrewStore } from "@/lib/cleanStore"
 import { format, parseISO } from "date-fns"
 import { Bell, CheckCircle, AlertCircle, Info, Calendar } from "lucide-react"
 
 export default function EmployeeNotificationsPage() {
   const { showNotification } = useNotification()
-  const { getNotificationsForCrew, markNotificationAsRead } = useCrewStore()
 
   const [currentUser, setCurrentUser] = useState<{ id: number | string } | null>(null)
   const [notifications, setNotifications] = useState<any[]>([])
   const [upcomingShifts, setUpcomingShifts] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
+
+  const fetchNotifications = async (userId: string) => {
+    try {
+      const res = await fetch(`/api/notifications?recipientId=${userId}`)
+      if (res.ok) {
+        const data = await res.json()
+        setNotifications(Array.isArray(data) ? data : [])
+      }
+    } catch (error) {
+      console.error("Error fetching notifications:", error)
+    }
+  }
 
   useEffect(() => {
     const user = sessionStorage.getItem("currentUser")
@@ -27,9 +37,8 @@ export default function EmployeeNotificationsPage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        // Get notifications from the store (no dedicated API endpoint)
-        const userNotifications = getNotificationsForCrew(Number(userData.id))
-        setNotifications(userNotifications)
+        // Fetch notifications from the MySQL-backed API
+        fetchNotifications(String(userData.id))
 
         // Fetch upcoming shifts from API
         fetchUpcomingShifts(userData)
@@ -37,7 +46,7 @@ export default function EmployeeNotificationsPage() {
     } catch (error) {
       console.error("Error loading notifications:", error)
     }
-  }, [getNotificationsForCrew])
+  }, [])
 
   const fetchUpcomingShifts = async (userData: any) => {
     try {
@@ -86,16 +95,18 @@ export default function EmployeeNotificationsPage() {
     }
   }
 
-  const handleMarkAsRead = (notificationId: number) => {
+  const handleMarkAsRead = async (notificationId: string | number) => {
     if (!currentUser) return
 
     setIsLoading(true)
     try {
-      markNotificationAsRead(notificationId)
+      await fetch("/api/notifications", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: notificationId }),
+      })
 
-      const userNotifications = getNotificationsForCrew(Number(currentUser.id))
-      setNotifications(userNotifications)
-
+      await fetchNotifications(String(currentUser.id))
       showNotification("success", "Notification Marked as Read", "The notification has been marked as read.")
     } catch (error) {
       console.error("Error marking notification as read:", error)
@@ -105,16 +116,18 @@ export default function EmployeeNotificationsPage() {
     }
   }
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     if (!currentUser) return
 
     setIsLoading(true)
     try {
-      notifications.filter((n) => !n.isRead).forEach((n) => markNotificationAsRead(n.id))
+      await fetch("/api/notifications", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipientId: String(currentUser.id), markAllRead: true }),
+      })
 
-      const userNotifications = getNotificationsForCrew(Number(currentUser.id))
-      setNotifications(userNotifications)
-
+      await fetchNotifications(String(currentUser.id))
       showNotification("success", "All Notifications Marked as Read", "All notifications have been marked as read.")
     } catch (error) {
       console.error("Error marking all notifications as read:", error)

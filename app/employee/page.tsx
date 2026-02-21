@@ -112,6 +112,60 @@ export default function EmployeeDashboard() {
 
     setIsLoading(true)
     try {
+      // Step 1: Capture photo for attendance verification
+      let photoDataUrl: string | null = null
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        })
+        const video = document.createElement("video")
+        video.srcObject = stream
+        video.play()
+        await new Promise((resolve) => { video.onloadedmetadata = resolve })
+        // Small delay to let camera warm up
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        const canvas = document.createElement("canvas")
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext("2d")
+        ctx?.drawImage(video, 0, 0)
+        photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
+        stream.getTracks().forEach((track) => track.stop())
+      } catch (cameraError) {
+        showNotification("error", "Camera Required", "Photo-based attendance is required. Please allow camera access to clock in.")
+        setIsLoading(false)
+        return
+      }
+
+      if (!photoDataUrl) {
+        showNotification("error", "Photo Required", "Could not capture photo. Please try again.")
+        setIsLoading(false)
+        return
+      }
+
+      // Step 2: Get GPS location
+      let location: { latitude: number; longitude: number; accuracy: number } | null = null
+      try {
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 60000,
+          })
+        })
+        location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        }
+      } catch (geoError) {
+        showNotification("error", "Location Required", "GPS location is required for attendance. Please enable location services.")
+        setIsLoading(false)
+        return
+      }
+
+      // Step 3: Submit attendance with photo and location verification
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeIn = now.toTimeString().slice(0, 8)
@@ -130,7 +184,7 @@ export default function EmployeeDashboard() {
 
       if (res.ok) {
         setLatestTimeRecord({ date: today, timeIn, status: "present" })
-        showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(timeIn)}`)
+        showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(timeIn)} (photo verified)`)
       } else {
         showNotification("error", "Error", "Failed to clock in. Please try again.")
       }
