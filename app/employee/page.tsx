@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { format } from "date-fns"
-import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert } from "lucide-react"
+import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert, Camera, Loader2, CheckCircle, XCircle } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 export default function EmployeeDashboard() {
   const { showNotification } = useNotification()
@@ -24,6 +25,14 @@ export default function EmployeeDashboard() {
   const [assignedBranch, setAssignedBranch] = useState<any | null>(null)
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([])
   const [accountStatus, setAccountStatus] = useState<"pending" | "approved" | "rejected" | undefined>(undefined)
+
+  // Unified clock-in/out modal state
+  const [showClockInModal, setShowClockInModal] = useState(false)
+  const [showClockOutModal, setShowClockOutModal] = useState(false)
+  const [cameraStatus, setCameraStatus] = useState<"waiting" | "active" | "captured" | "error">("waiting")
+  const [locationStatus, setLocationStatus] = useState<"checking" | "valid" | "error">("checking")
+  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number; accuracy: number } | null>(null)
 
   // Load all data from API endpoints
   useEffect(() => {
@@ -107,136 +116,137 @@ export default function EmployeeDashboard() {
     }
   }, [])
 
-  const handleClockIn = async () => {
-    if (!currentUser) return
+  // --- Unified camera capture (robust, works on mobile + desktop) ---
+  const capturePhoto = async (): Promise<boolean> => {
+    setCameraStatus("active")
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
+      setCameraStatus("error")
+      return false
+    }
+
+    try {
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        })
+      } catch (constraintError: any) {
+        if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        } else {
+          throw constraintError
+        }
+      }
+
+      const video = document.createElement("video")
+      video.setAttribute("autoplay", "")
+      video.setAttribute("playsinline", "")
+      video.setAttribute("muted", "")
+      video.muted = true
+      video.srcObject = stream
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
+        video.onloadeddata = () => { clearTimeout(timeout); resolve() }
+        video.onerror = () => { clearTimeout(timeout); reject(new Error("Video element error")) }
+      })
+
+      await video.play()
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
+      if (!video.videoWidth || !video.videoHeight) {
+        stream.getTracks().forEach((track) => track.stop())
+        showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again.")
+        setCameraStatus("error")
+        return false
+      }
+
+      const canvas = document.createElement("canvas")
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext("2d")
+      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+      const photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
+      setCapturedPhoto(photoDataUrl)
+      setCameraStatus("captured")
+      stream.getTracks().forEach((track) => track.stop())
+      return true
+    } catch (cameraError: any) {
+      let title = "Camera Error"
+      let message = "Could not access camera. Please try again."
+      if (cameraError.name === "NotAllowedError" || cameraError.name === "PermissionDeniedError") {
+        title = "Camera Permission Denied"
+        message = "Camera access was denied. Please allow camera permissions in your browser settings and try again."
+      } else if (cameraError.name === "NotFoundError" || cameraError.name === "DevicesNotFoundError") {
+        title = "No Camera Found"
+        message = "No camera was detected on this device. Please connect a camera and try again."
+      } else if (cameraError.name === "NotReadableError" || cameraError.name === "TrackStartError") {
+        title = "Camera In Use"
+        message = "The camera is already in use by another application. Please close other apps using the camera."
+      } else if (cameraError.message === "Camera timed out") {
+        title = "Camera Timeout"
+        message = "Camera took too long to start. Please check your camera connection and try again."
+      }
+      console.error("Camera error:", cameraError.name, cameraError.message)
+      showNotification("error", title, message)
+      setCameraStatus("error")
+      return false
+    }
+  }
+
+  // --- Modal openers ---
+  const handleClockInAttempt = () => {
+    setShowClockInModal(true)
+    setCameraStatus("waiting")
+    setLocationStatus("checking")
+    setCapturedPhoto(null)
+    setCurrentLocation(null)
+  }
+
+  const handleClockOutAttempt = () => {
+    setShowClockOutModal(true)
+    setCameraStatus("waiting")
+    setLocationStatus("checking")
+    setCapturedPhoto(null)
+    setCurrentLocation(null)
+  }
+
+  // --- GPS validation (triggered after photo is captured) ---
+  const handlePhotoSubmit = async () => {
+    if (!capturedPhoto) return
+    setLocationStatus("checking")
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        if (!navigator.geolocation) { reject(new Error("Geolocation not supported")); return }
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        })
+      })
+      setCurrentLocation({
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: position.coords.accuracy,
+      })
+      setLocationStatus("valid")
+    } catch (error) {
+      console.error("GPS validation error:", error)
+      setLocationStatus("error")
+      showNotification("error", "Location Error", "GPS location is required. Please enable location services.")
+    }
+  }
+
+  // --- Submit clock-in to API ---
+  const submitClockIn = async () => {
+    if (!currentUser || !capturedPhoto) return
     setIsLoading(true)
     try {
-      // Step 1: Capture photo for attendance verification
-      let photoDataUrl: string | null = null
-
-      // Check if getUserMedia is available (requires HTTPS except on localhost)
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
-        setIsLoading(false)
-        return
-      }
-
-      try {
-        // Try front camera first, fall back to any camera if facingMode is not supported
-        let stream: MediaStream
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-            audio: false,
-          })
-        } catch (constraintError: any) {
-          // Fallback: request any available camera without facingMode constraint
-          if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-          } else {
-            throw constraintError
-          }
-        }
-
-        const video = document.createElement("video")
-        video.setAttribute("autoplay", "")
-        video.setAttribute("playsinline", "") // Required for iOS Safari
-        video.setAttribute("muted", "")
-        video.muted = true
-        video.srcObject = stream
-
-        // Wait for video to have actual frame data available (not just metadata)
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
-          video.onloadeddata = () => {
-            clearTimeout(timeout)
-            resolve()
-          }
-          video.onerror = () => {
-            clearTimeout(timeout)
-            reject(new Error("Video element error"))
-          }
-        })
-
-        // Await play() — this returns a Promise that can reject
-        await video.play()
-
-        // Wait for camera to deliver a real frame (warm-up period)
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-
-        // Verify video dimensions are valid before capturing
-        if (!video.videoWidth || !video.videoHeight) {
-          stream.getTracks().forEach((track) => track.stop())
-          showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again or use a different device.")
-          setIsLoading(false)
-          return
-        }
-
-        const canvas = document.createElement("canvas")
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext("2d")
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        }
-        photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
-
-        // Stop all camera tracks immediately after capture
-        stream.getTracks().forEach((track) => track.stop())
-      } catch (cameraError: any) {
-        // Provide specific error messages based on the error type
-        let title = "Camera Error"
-        let message = "Could not access camera. Please try again."
-
-        if (cameraError.name === "NotAllowedError" || cameraError.name === "PermissionDeniedError") {
-          title = "Camera Permission Denied"
-          message = "Camera access was denied. Please allow camera permissions in your browser settings and try again."
-        } else if (cameraError.name === "NotFoundError" || cameraError.name === "DevicesNotFoundError") {
-          title = "No Camera Found"
-          message = "No camera was detected on this device. Please connect a camera and try again."
-        } else if (cameraError.name === "NotReadableError" || cameraError.name === "TrackStartError") {
-          title = "Camera In Use"
-          message = "The camera is already in use by another application. Please close other apps using the camera and try again."
-        } else if (cameraError.message === "Camera timed out") {
-          title = "Camera Timeout"
-          message = "Camera took too long to start. Please check your camera connection and try again."
-        }
-
-        console.error("Camera error:", cameraError.name, cameraError.message)
-        showNotification("error", title, message)
-        setIsLoading(false)
-        return
-      }
-
-      if (!photoDataUrl) {
-        showNotification("error", "Photo Required", "Could not capture photo. Please try again.")
-        setIsLoading(false)
-        return
-      }
-
-      // Step 2: Get GPS location
-      let location: { latitude: number; longitude: number; accuracy: number } | null = null
-      try {
-        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 60000,
-          })
-        })
-        location = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-        }
-      } catch (geoError) {
-        showNotification("error", "Location Required", "GPS location is required for attendance. Please enable location services.")
-        setIsLoading(false)
-        return
-      }
-
-      // Step 3: Submit attendance with photo and location verification
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeIn = now.toTimeString().slice(0, 8)
@@ -245,19 +255,32 @@ export default function EmployeeDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "clock-in",
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
           status: "present",
+          timeIn,
+          photoUrl: capturedPhoto,
+          latitude: currentLocation?.latitude || null,
+          longitude: currentLocation?.longitude || null,
           branchId: currentUser.branchId || null,
         }),
       })
 
       if (res.ok) {
-        setLatestTimeRecord({ date: today, timeIn, status: "present" })
-        showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(timeIn)} (photo verified)`)
+        const data = await res.json()
+        if (data.alreadyClockedIn) {
+          showNotification("info", "Already Clocked In", `You already clocked in today at ${formatTime(data.timeIn)}.`)
+          setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: "present" }))
+        } else {
+          setLatestTimeRecord({ date: today, timeIn: data.timeIn || timeIn, status: "present" })
+          showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)} (photo verified).`)
+        }
+        setShowClockInModal(false)
       } else {
-        showNotification("error", "Error", "Failed to clock in. Please try again.")
+        const err = await res.json().catch(() => ({}))
+        showNotification("error", "Error", err.message || "Failed to clock in. Please try again.")
       }
     } catch (error) {
       console.error("Error clocking in:", error)
@@ -267,35 +290,35 @@ export default function EmployeeDashboard() {
     }
   }
 
-  const handleClockOut = async () => {
-    if (!currentUser) return
-
+  // --- Submit clock-out to API ---
+  const submitClockOut = async () => {
+    if (!currentUser || !capturedPhoto) return
     setIsLoading(true)
     try {
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeOut = now.toTimeString().slice(0, 8)
 
-      // Update the attendance record
       const res = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "clock-out",
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
-          status: "present",
+          timeOut,
         }),
       })
 
       if (res.ok) {
-        setLatestTimeRecord((prev: any) => ({
-          ...prev,
-          timeOut,
-        }))
-        showNotification("success", "Clocked Out", `You have successfully clocked out at ${formatTime(timeOut)}`)
+        const data = await res.json()
+        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut }))
+        setShowClockOutModal(false)
+        showNotification("success", "Clocked Out", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}.`)
       } else {
-        showNotification("error", "Error", "Failed to clock out. Please try again.")
+        const err = await res.json().catch(() => ({}))
+        showNotification("error", "Error", err.message || "Failed to clock out. Please try again.")
       }
     } catch (error) {
       console.error("Error clocking out:", error)
@@ -454,13 +477,19 @@ export default function EmployeeDashboard() {
 
               <div className="pt-2">
                 {!latestTimeRecord || latestTimeRecord.status !== "present" ? (
-                  <Button className="w-full" onClick={handleClockIn} disabled={isLoading}>
+                  <Button className="w-full" onClick={handleClockInAttempt} disabled={isLoading}>
+                    <Camera className="mr-2 h-4 w-4" />
                     Clock In
                   </Button>
-                ) : (
-                  <Button className="w-full" variant="outline" onClick={handleClockOut} disabled={isLoading}>
+                ) : !latestTimeRecord.timeOut ? (
+                  <Button className="w-full" variant="outline" onClick={handleClockOutAttempt} disabled={isLoading}>
+                    <Camera className="mr-2 h-4 w-4" />
                     Clock Out
                   </Button>
+                ) : (
+                  <div className="text-center text-sm text-muted-foreground">
+                    Attendance complete for today
+                  </div>
                 )}
               </div>
             </div>
@@ -547,6 +576,144 @@ export default function EmployeeDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Clock-In Verification Modal */}
+      <Dialog open={showClockInModal} onOpenChange={setShowClockInModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clock In Verification</DialogTitle>
+            <DialogDescription>Take a selfie photo, then we'll verify your location</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium">1. Take Photo</h4>
+                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
+                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
+                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
+                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
+              </div>
+              {cameraStatus === "waiting" && (
+                <Button onClick={capturePhoto} className="w-full">
+                  <Camera className="mr-2 h-4 w-4" />
+                  Take Selfie
+                </Button>
+              )}
+              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
+              {cameraStatus === "captured" && capturedPhoto && (
+                <div className="space-y-2">
+                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
+                  <img src={capturedPhoto} alt="Captured selfie" className="w-32 h-32 object-cover rounded-md mx-auto" />
+                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full">Retake Photo</Button>
+                </div>
+              )}
+              {cameraStatus === "error" && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
+                  <p className="text-sm text-red-800 dark:text-red-200">Unable to access camera. Please allow camera permissions and try again.</p>
+                  <Button variant="outline" size="sm" className="mt-2" onClick={capturePhoto}>Retry Camera Access</Button>
+                </div>
+              )}
+            </div>
+            {cameraStatus === "captured" && locationStatus === "checking" && (
+              <Button onClick={handlePhotoSubmit} className="w-full">Submit Photo</Button>
+            )}
+            {cameraStatus === "captured" && locationStatus !== "checking" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">2. Location Verification</h4>
+                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
+                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
+                </div>
+                {locationStatus === "valid" && (
+                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
+                    <p className="text-sm text-green-800 dark:text-green-200">✓ GPS location verified</p>
+                  </div>
+                )}
+                {locationStatus === "error" && (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
+                    <p className="text-sm text-amber-800 dark:text-amber-200">Location access required. Please enable location permissions.</p>
+                    <Button variant="outline" size="sm" className="mt-2" onClick={handlePhotoSubmit}>Retry Location Check</Button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="pt-4 border-t">
+              <Button onClick={submitClockIn} disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading} className="w-full">
+                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : "Confirm Clock In"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clock-Out Verification Modal */}
+      <Dialog open={showClockOutModal} onOpenChange={setShowClockOutModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clock Out Verification</DialogTitle>
+            <DialogDescription>Take a selfie photo to verify your clock-out</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-medium">1. Take Photo</h4>
+                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
+                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
+                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
+                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
+              </div>
+              {cameraStatus === "waiting" && (
+                <Button onClick={capturePhoto} className="w-full">
+                  <Camera className="mr-2 h-4 w-4" />
+                  Take Selfie
+                </Button>
+              )}
+              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
+              {cameraStatus === "captured" && capturedPhoto && (
+                <div className="space-y-2">
+                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
+                  <img src={capturedPhoto} alt="Captured selfie" className="w-32 h-32 object-cover rounded-md mx-auto" />
+                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full">Retake Photo</Button>
+                </div>
+              )}
+              {cameraStatus === "error" && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
+                  <p className="text-sm text-red-800 dark:text-red-200">Unable to access camera. Please allow camera permissions and try again.</p>
+                  <Button variant="outline" size="sm" className="mt-2" onClick={capturePhoto}>Retry Camera Access</Button>
+                </div>
+              )}
+            </div>
+            {cameraStatus === "captured" && locationStatus === "checking" && (
+              <Button onClick={handlePhotoSubmit} className="w-full">Submit Photo</Button>
+            )}
+            {cameraStatus === "captured" && locationStatus !== "checking" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium">2. Location Verification</h4>
+                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
+                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
+                </div>
+                {locationStatus === "valid" && (
+                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
+                    <p className="text-sm text-green-800 dark:text-green-200">✓ GPS location verified</p>
+                  </div>
+                )}
+                {locationStatus === "error" && (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
+                    <p className="text-sm text-amber-800 dark:text-amber-200">Location access required. Please enable location permissions.</p>
+                    <Button variant="outline" size="sm" className="mt-2" onClick={handlePhotoSubmit}>Retry Location Check</Button>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="pt-4 border-t">
+              <Button onClick={submitClockOut} disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading} className="w-full">
+                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : "Confirm Clock Out"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

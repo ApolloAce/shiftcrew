@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS daily_attendance (
   employeeName VARCHAR(200) DEFAULT NULL,
   date         VARCHAR(10)  NOT NULL,
   status       ENUM('present','absent') NOT NULL DEFAULT 'present',
+  timeIn       VARCHAR(8)   DEFAULT NULL,          -- HH:MM:SS
+  timeOut      VARCHAR(8)   DEFAULT NULL,          -- HH:MM:SS
+  photoUrl     LONGTEXT     DEFAULT NULL,          -- base64 selfie data URL
+  latitude     DECIMAL(10,7) DEFAULT NULL,
+  longitude    DECIMAL(10,7) DEFAULT NULL,
   branchId     VARCHAR(64)  DEFAULT NULL,
   branchName   VARCHAR(255) DEFAULT NULL,
   createdAt    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,

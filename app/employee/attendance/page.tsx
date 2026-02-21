@@ -83,41 +83,81 @@ export default function EmployeeAttendancePage() {
   const capturePhoto = async (): Promise<boolean> => {
     setCameraStatus("active")
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
+      setCameraStatus("error")
+      return false
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      })
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false,
+        })
+      } catch (constraintError: any) {
+        if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        } else {
+          throw constraintError
+        }
+      }
 
       const video = document.createElement("video")
+      video.setAttribute("autoplay", "")
+      video.setAttribute("playsinline", "")
+      video.setAttribute("muted", "")
+      video.muted = true
       video.srcObject = stream
-      video.play()
 
-      await new Promise((resolve) => {
-        video.onloadedmetadata = resolve
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
+        video.onloadeddata = () => { clearTimeout(timeout); resolve() }
+        video.onerror = () => { clearTimeout(timeout); reject(new Error("Video element error")) }
       })
+
+      await video.play()
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
+      if (!video.videoWidth || !video.videoHeight) {
+        stream.getTracks().forEach((track) => track.stop())
+        showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again.")
+        setCameraStatus("error")
+        return false
+      }
 
       const canvas = document.createElement("canvas")
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       const ctx = canvas.getContext("2d")
-      ctx?.drawImage(video, 0, 0)
+      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
       const photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
       setCapturedPhoto(photoDataUrl)
       setCameraStatus("captured")
-
       stream.getTracks().forEach((track) => track.stop())
       return true
-    } catch (error) {
-      console.error("Camera error:", error)
+    } catch (error: any) {
+      console.error("Camera error:", error.name, error.message)
       setCameraStatus("error")
 
-      if (error instanceof Error && error.name === "NotAllowedError") {
-        showNotification("error", "Camera Error", "Camera access denied. Please allow camera permissions.")
-      } else {
-        showNotification("error", "Camera Error", "Unable to access camera. Please check your permissions.")
+      let title = "Camera Error"
+      let message = "Unable to access camera. Please check your permissions."
+      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+        title = "Camera Permission Denied"
+        message = "Camera access was denied. Please allow camera permissions in your browser settings."
+      } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+        title = "No Camera Found"
+        message = "No camera was detected on this device."
+      } else if (error.name === "NotReadableError" || error.name === "TrackStartError") {
+        title = "Camera In Use"
+        message = "The camera is already in use by another application."
+      } else if (error.message === "Camera timed out") {
+        title = "Camera Timeout"
+        message = "Camera took too long to start. Please check your camera connection."
       }
+      showNotification("error", title, message)
       return false
     }
   }
@@ -180,29 +220,42 @@ export default function EmployeeAttendancePage() {
 
     setIsLoading(true)
     try {
-      const today = new Date().toISOString().split("T")[0]
+      const now = new Date()
+      const today = now.toISOString().split("T")[0]
+      const timeIn = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "clock-in",
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
           status: "present",
+          timeIn,
+          photoUrl: capturedPhoto,
+          latitude: currentLocation?.latitude || null,
+          longitude: currentLocation?.longitude || null,
           branchId: currentUser.branchId || null,
           branchName: branchInfo?.branchName || null,
         }),
       })
 
       if (res.ok) {
-        const timeIn = new Date().toTimeString().slice(0, 8)
-        setLatestTimeRecord({ date: today, status: "present", timeIn })
+        const data = await res.json()
+        if (data.alreadyClockedIn) {
+          showNotification("info", "Already Clocked In", `You already clocked in today at ${formatTime(data.timeIn)}.`)
+          setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: "present" }))
+        } else {
+          setLatestTimeRecord({ date: today, status: "present", timeIn: data.timeIn || timeIn })
+          showNotification("success", "Clock In Success", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}!`)
+        }
         setShowClockInModal(false)
-        showNotification("success", "Clock In Success", "You have successfully clocked in!")
         if (currentUser) fetchAttendanceData(currentUser)
       } else {
-        showNotification("error", "Error", "Failed to clock in. Please try again.")
+        const err = await res.json().catch(() => ({}))
+        showNotification("error", "Error", err.message || "Failed to clock in. Please try again.")
       }
     } catch (error) {
       console.error("Error clocking in:", error)
@@ -217,29 +270,31 @@ export default function EmployeeAttendancePage() {
 
     setIsLoading(true)
     try {
-      const today = new Date().toISOString().split("T")[0]
+      const now = new Date()
+      const today = now.toISOString().split("T")[0]
+      const timeOut = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "clock-out",
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
-          status: "present",
-          branchId: currentUser.branchId || null,
-          branchName: branchInfo?.branchName || null,
+          timeOut,
         }),
       })
 
       if (res.ok) {
-        const timeOut = new Date().toTimeString().slice(0, 8)
-        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut }))
+        const data = await res.json()
+        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut }))
         setShowClockOutModal(false)
-        showNotification("success", "Clock Out Success", "You have successfully clocked out!")
+        showNotification("success", "Clock Out Success", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}!`)
         if (currentUser) fetchAttendanceData(currentUser)
       } else {
-        showNotification("error", "Error", "Failed to clock out. Please try again.")
+        const err = await res.json().catch(() => ({}))
+        showNotification("error", "Error", err.message || "Failed to clock out. Please try again.")
       }
     } catch (error) {
       console.error("Error clocking out:", error)
@@ -464,13 +519,30 @@ export default function EmployeeAttendancePage() {
                       variant={latestTimeRecord?.status === "present" ? "default" : "outline"}
                       className="text-lg px-3 py-1"
                     >
-                      {latestTimeRecord?.status === "present" ? "Present" : "Not Clocked In"}
+                      {latestTimeRecord?.status === "present"
+                        ? latestTimeRecord?.timeOut ? "Completed" : "Present"
+                        : "Not Clocked In"}
                     </Badge>
+                    {latestTimeRecord?.timeIn && (
+                      <div className="mt-2 text-sm text-muted-foreground">
+                        Time In: <span className="font-medium text-foreground">{formatTime(latestTimeRecord.timeIn)}</span>
+                      </div>
+                    )}
+                    {latestTimeRecord?.timeOut && (
+                      <div className="mt-1 text-sm text-muted-foreground">
+                        Time Out: <span className="font-medium text-foreground">{formatTime(latestTimeRecord.timeOut)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex justify-center gap-4">
-                  <Button size="lg" className="w-40" onClick={handleClockInAttempt} disabled={isLoading}>
+                  <Button
+                    size="lg"
+                    className="w-40"
+                    onClick={handleClockInAttempt}
+                    disabled={isLoading || (latestTimeRecord && latestTimeRecord.status === "present" && !!latestTimeRecord.timeIn)}
+                  >
                     <Camera className="mr-2 h-4 w-4" />
                     Clock In
                   </Button>
@@ -480,7 +552,7 @@ export default function EmployeeAttendancePage() {
                     variant="outline"
                     className="w-40 bg-transparent"
                     onClick={handleClockOutAttempt}
-                    disabled={isLoading || !latestTimeRecord || latestTimeRecord.status !== "present"}
+                    disabled={isLoading || !latestTimeRecord || latestTimeRecord.status !== "present" || !!latestTimeRecord.timeOut}
                   >
                     <Camera className="mr-2 h-4 w-4" />
                     Clock Out
