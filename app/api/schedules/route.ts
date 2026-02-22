@@ -4,20 +4,26 @@ import { query, execute } from "@/lib/mysql";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// GET /api/schedules?date=YYYY-MM-DD
+// GET /api/schedules?date=YYYY-MM-DD&scheduleFor=YYYY-MM-DD&weekStart=YYYY-MM-DD
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const date = url.searchParams.get("date");
+    const scheduleFor = url.searchParams.get("scheduleFor");
     const weekStart = url.searchParams.get("weekStart");
 
     let sql = "SELECT * FROM schedules";
     const params: any[] = [];
     const conditions: string[] = [];
 
-    if (date) {
-      conditions.push("date = ?");
-      params.push(date);
+    if (scheduleFor) {
+      // Query by the actual target date (scheduleFor column)
+      conditions.push("scheduleFor = ?");
+      params.push(scheduleFor);
+    } else if (date) {
+      // Match either date or scheduleFor to find schedules relevant to this day
+      conditions.push("(date = ? OR scheduleFor = ?)");
+      params.push(date, date);
     }
     if (weekStart) {
       conditions.push("weekStart = ?");
@@ -175,16 +181,16 @@ export async function DELETE(req: Request) {
     const weekStart = url.searchParams.get("weekStart");
     if (!weekStart) return NextResponse.json({ message: "Missing weekStart" }, { status: 400 });
 
-    // Delete by weekStart
+    // Delete by weekStart column
     await execute("DELETE FROM schedules WHERE weekStart = ?", [weekStart]);
 
-    // Also delete by each individual day of the week
+    // Also delete by each individual day of the week (matching date OR scheduleFor)
     const startDate = new Date(weekStart + "T00:00:00");
     for (let i = 0; i < 7; i++) {
       const d = new Date(startDate);
       d.setDate(startDate.getDate() + i);
       const iso = d.toISOString().split("T")[0];
-      await execute("DELETE FROM schedules WHERE date = ?", [iso]);
+      await execute("DELETE FROM schedules WHERE date = ? OR scheduleFor = ?", [iso, iso]);
     }
 
     return NextResponse.json({ success: true });

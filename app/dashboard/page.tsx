@@ -13,9 +13,9 @@ import { getTodayAttendance, AttendanceRecord, saveAttendanceRecord } from "@/li
 import { getSchedulesForDate, Schedule } from "@/lib/firestore-schedule-service"
 import { updateScheduleAssignments } from "@/lib/firestore-schedule-service"
 
-// Helper: pick only the schedule for today (no fallback)
-function pickTodaySchedule(schedules, todayISO) {
-  return schedules.find(s => s.scheduleFor === todayISO) || schedules.find(s => s.date === todayISO) || null;
+// Helper: pick only the schedule for today (no fallback) — kept for backward compat
+function pickTodaySchedule(schedules: any[], todayISO: string) {
+  return schedules.find((s: any) => s.scheduleFor === todayISO) || schedules.find((s: any) => s.date === todayISO) || null;
 }
 
 function getMonday(date: Date) {
@@ -49,30 +49,30 @@ export default function DashboardPage() {
         ])
         setEmployees(emps)
         setBranches(brs)
-        // Find the current week's Monday and Sunday
+        // Fetch only today's schedule using scheduleFor (exact match)
         const today = new Date()
         const todayISO = today.toISOString().split("T")[0]
-        const monday = getMonday(today)
-        const weekDates: string[] = []
-        for (let i = 0; i < 7; i++) {
-          const d = new Date(monday)
-          d.setDate(monday.getDate() + i)
-          weekDates.push(d.toISOString().split("T")[0])
-        }
-        // Fetch all schedules for the week
-        let allSchedules: any[] = []
-        for (const dateISO of weekDates) {
-          const schedules = await getSchedulesForDate(dateISO)
-          if (dateISO === todayISO) {
+        try {
+          const res = await fetch(`/api/schedules?scheduleFor=${todayISO}`)
+          if (res.ok) {
+            const schedules = await res.json()
             console.log('[DEBUG] Schedules fetched for today', todayISO, schedules)
+            if (Array.isArray(schedules) && schedules.length > 0) {
+              // Pick the most recently updated schedule for today
+              const todaySchedule = schedules.sort((a: any, b: any) => {
+                const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
+                const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
+                return dateB - dateA
+              })[0]
+              setScheduleData(todaySchedule)
+            } else {
+              setScheduleData(null)
+            }
+          } else {
+            setScheduleData(null)
           }
-          allSchedules = allSchedules.concat(schedules)
-        }
-        // Only show today's schedule, never fallback to previous days
-        const todaySchedule = pickTodaySchedule(allSchedules, todayISO)
-        if (todaySchedule) {
-          setScheduleData(todaySchedule)
-        } else {
+        } catch (schedErr) {
+          console.error("Dashboard: Error fetching today's schedule:", schedErr)
           setScheduleData(null)
         }
       } catch (error) {
@@ -134,7 +134,7 @@ export default function DashboardPage() {
   useEffect(() => {
     console.log('[DEBUG] scheduleData:', scheduleData);
     if (scheduleData && scheduleData.branchAssignments) {
-      const scheduledCrewsByBranch = {};
+      const scheduledCrewsByBranch: Record<string, any[]> = {};
       for (const branch of scheduleData.branchAssignments) {
         scheduledCrewsByBranch[branch.branchName] = branch.employees.map(emp => ({
           ...emp,
@@ -213,7 +213,7 @@ export default function DashboardPage() {
       }))
     );
     try {
-      await updateScheduleAssignments(scheduleData.id, updatedAssignments);
+      await updateScheduleAssignments(scheduleData.id || '', updatedAssignments);
 
       // Also persist to daily_attendance table
       const todayISO = new Date().toISOString().split("T")[0]
@@ -227,7 +227,7 @@ export default function DashboardPage() {
       })
 
       // Fetch the updated schedule to ensure we get the latest state
-      const schedules = await getSchedulesForDate(scheduleData.date);
+      const schedules = await getSchedulesForDate(scheduleData.date || '');
       const updated = schedules.find((s: any) => s.id === scheduleData.id);
       if (updated) {
         setScheduleData(updated);

@@ -77,7 +77,17 @@ export default function EmployeeSchedulePage() {
         const employeeShifts: EmployeeShift[] = []
 
         if (Array.isArray(schedules)) {
+          // Deduplicate by scheduleFor date — keep only the latest schedule per day
+          const byDate: Record<string, any> = {}
           for (const sched of schedules) {
+            const targetDate = sched.scheduleFor || sched.date
+            const existing = byDate[targetDate]
+            if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
+              byDate[targetDate] = sched
+            }
+          }
+
+          for (const sched of Object.values(byDate)) {
             let assignments = sched.branchAssignments
             if (typeof assignments === "string") {
               try { assignments = JSON.parse(assignments) } catch { assignments = null }

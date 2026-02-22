@@ -67,26 +67,30 @@ export default function EmployeeDashboard() {
             setLatestTimeRecord(attendanceRes[0])
           }
 
-          // Fetch schedules and find today's
+          // Fetch schedules for today using scheduleFor (exact match)
           try {
-            const scheduleRes = await fetch(`/api/schedules?date=${today}`)
+            const scheduleRes = await fetch(`/api/schedules?scheduleFor=${today}`)
             if (scheduleRes.ok) {
               const schedules = await scheduleRes.json()
-              // Find this employee's schedule for today
-              if (Array.isArray(schedules)) {
-                for (const sched of schedules) {
+              // Find this employee's schedule for today (use latest if multiple)
+              if (Array.isArray(schedules) && schedules.length > 0) {
+                const sorted = schedules.sort((a: any, b: any) => {
+                  return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+                })
+                for (const sched of sorted) {
                   if (sched.branchAssignments) {
                     let assignments = sched.branchAssignments
                     if (typeof assignments === "string") {
                       try { assignments = JSON.parse(assignments) } catch { assignments = null }
                     }
                     if (Array.isArray(assignments)) {
+                      let found = false
                       for (const branch of assignments) {
-                        const found = branch.employees?.find(
+                        const emp = branch.employees?.find(
                           (e: any) => String(e.employeeId) === String(userData.id)
                         )
-                        if (found) {
-                          const shiftObj = typeof found.shift === "object" && found.shift ? found.shift : null
+                        if (emp) {
+                          const shiftObj = typeof emp.shift === "object" && emp.shift ? emp.shift : null
                           setTodaySchedule({
                             date: sched.scheduleFor || sched.date,
                             startTime: shiftObj?.start || sched.time || "",
@@ -94,9 +98,11 @@ export default function EmployeeDashboard() {
                             branchName: branch.branchName || "Unknown",
                             notes: sched.notes || "",
                           })
+                          found = true
                           break
                         }
                       }
+                      if (found) break
                     }
                   }
                 }

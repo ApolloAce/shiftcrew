@@ -408,52 +408,46 @@ export default function SchedulingPage() {
       const dayOfWeek = today.getDay()
       const monday = new Date(today)
       monday.setDate(today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1))
+      const mondayISO = formatDateLocal(monday)
 
       const schedulesByDate: Record<string, any> = {}
 
-      // Fetch schedules for each day of the week via API
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday)
-        d.setDate(monday.getDate() + i)
-        const dateISO = formatDateLocal(d)
-
-        try {
-          const schedules = await getSchedulesForDateFromFirestore(dateISO)
-
-          if (schedules && schedules.length > 0) {
-            // Use the most recent schedule for this date
-            let latestSchedule = schedules.sort((a: any, b: any) => {
-              const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-              const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-              return dateB - dateA
-            })[0]
-
-            // Transform flat assignments to branchAssignments if needed
-            if (latestSchedule.assignments && !latestSchedule.branchAssignments) {
-              const branchMap: Record<string, any> = {}
-              for (const assignment of latestSchedule.assignments) {
-                const branchName = assignment.branchName || "Unknown"
-                if (!branchMap[branchName]) {
-                  branchMap[branchName] = {
-                    branchName,
-                    branchId: assignment.branchId,
-                    employees: []
+      // Fetch all schedules for this week by weekStart (single query)
+      try {
+        const res = await fetch(`/api/schedules?weekStart=${mondayISO}`)
+        if (res.ok) {
+          const allSchedules = await res.json()
+          // Group by scheduleFor, keeping only the latest per day
+          for (const sched of allSchedules) {
+            const targetDate = sched.scheduleFor || sched.date
+            const existing = schedulesByDate[targetDate]
+            if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
+              // Transform flat assignments to branchAssignments if needed
+              if (sched.assignments && !sched.branchAssignments) {
+                const branchMap: Record<string, any> = {}
+                for (const assignment of sched.assignments) {
+                  const branchName = assignment.branchName || "Unknown"
+                  if (!branchMap[branchName]) {
+                    branchMap[branchName] = {
+                      branchName,
+                      branchId: assignment.branchId,
+                      employees: []
+                    }
                   }
+                  branchMap[branchName].employees.push({
+                    employeeId: assignment.employeeId,
+                    employeeName: assignment.employeeName,
+                    shift: formatShift(assignment.shift)
+                  })
                 }
-                branchMap[branchName].employees.push({
-                  employeeId: assignment.employeeId,
-                  employeeName: assignment.employeeName,
-                  shift: formatShift(assignment.shift)
-                })
+                sched.branchAssignments = Object.values(branchMap)
               }
-              latestSchedule.branchAssignments = Object.values(branchMap)
+              schedulesByDate[targetDate] = sched
             }
-
-            schedulesByDate[dateISO] = latestSchedule
           }
-        } catch (e) {
-          console.warn("Error fetching schedule for", dateISO, e)
         }
+      } catch (e) {
+        console.warn("Error fetching week schedules by weekStart:", e)
       }
 
       setWeekSchedules(schedulesByDate)
@@ -849,40 +843,62 @@ export default function SchedulingPage() {
         }
       }
 
-      // Save single document for the selected date (not the entire week)
+      // Save schedule documents for the full week (Mon-Fri)
       if (allAssignments.length > 0) {
         try {
-          console.log("[Manual Schedule] Saving schedule for date:", selectedDate, "with", allAssignments.length, "assignments")
-
-          // Delete any existing schedule for just this date (handled by addSchedule upsert)
-          // Save single schedule document for the selected date
           const currentTime = new Date().toTimeString().slice(0, 5)
-
-          // Calculate week bounds for the selected date
           const weekBounds = getWeekBoundsFromDate(selectedDate)
 
-          const savedId = await addScheduleToFirestore({
-            date: selectedDate,
-            scheduleFor: selectedDate,
-            time: currentTime,
-            weekStart: weekBounds.weekStart,
-            weekEnd: weekBounds.weekEnd,
-            manuallyScheduled: true, // Flag this as manually scheduled
-            assignments: allAssignments.map((a) => ({
-              employeeId: a.employeeId,
-              employeeName: a.employeeName,
-              branchId: a.branchId,
-              branchName: a.branchName,
-              isPresent: true,
-              shift: a.shift,
-            })),
-          })
+          console.log("[Manual Schedule] Saving full week schedule:", weekBounds.weekStart, "-", weekBounds.weekEnd, "with", allAssignments.length, "assignments")
 
-          console.log("[Manual Schedule] Successfully saved schedule for", selectedDate, "Document ID:", savedId)
-          const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
-          showNotification("success", "Schedule Saved", `Manual schedule saved for ${selectedDate} with ${allAssignments.length} crew members across: ${branchNames}`)
+          // Delete any existing schedules for this week first to prevent duplicates
+          try {
+            await deleteSchedulesForWeek(weekBounds.weekStart)
+          } catch (err) {
+            console.warn("[Manual Schedule] Could not delete existing schedules:", err)
+          }
 
-          // Refresh the current week schedule display to show updated week bounds
+          // Save 5 schedule documents (Mon-Fri)
+          const mondayDate = new Date(weekBounds.weekStart + "T00:00:00")
+          const savedDates: string[] = []
+
+          for (let i = 0; i < 5; i++) {
+            const d = new Date(mondayDate)
+            d.setDate(mondayDate.getDate() + i)
+            const dayISO = formatDateLocal(d)
+
+            try {
+              await addScheduleToFirestore({
+                date: weekBounds.weekStart,
+                scheduleFor: dayISO,
+                time: currentTime,
+                weekStart: weekBounds.weekStart,
+                weekEnd: weekBounds.weekEnd,
+                manuallyScheduled: true,
+                assignments: allAssignments.map((a) => ({
+                  employeeId: a.employeeId,
+                  employeeName: a.employeeName,
+                  branchId: a.branchId,
+                  branchName: a.branchName,
+                  isPresent: true,
+                  shift: a.shift,
+                })),
+              })
+              savedDates.push(dayISO)
+            } catch (e) {
+              console.warn("[Manual Schedule] Failed to save schedule for", dayISO, e)
+            }
+          }
+
+          if (savedDates.length > 0) {
+            const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
+            showNotification("success", "Schedule Saved", `Manual schedule saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) with ${allAssignments.length} crew members across: ${branchNames}`)
+            console.log("[Manual Schedule] Saved schedules for dates:", savedDates)
+          } else {
+            showNotification("error", "Save Error", "Failed to save any schedule documents")
+          }
+
+          // Refresh the current week schedule display
           await fetchCurrentWeekSchedule()
           await fetchWeekSchedulesFromFirestore()
         } catch (err) {

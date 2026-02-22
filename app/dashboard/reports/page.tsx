@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
 import { getSchedulesForDate } from "@/lib/firestore-schedule-service"
+import { getAttendanceForDateRange } from "@/lib/firestore-attendance-service"
 import { CheckCircle2, XCircle, BarChart2, Users, MapPin, Calendar } from "lucide-react"
 import { Chart, ChartContainer } from "@/components/ui/chart"
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +30,7 @@ export default function ReportsPage() {
   const [timeRange, setTimeRange] = useState<"day" | "week" | "month">("week")
   const [leavePeriod, setLeavePeriod] = useState<"weekly" | "monthly" | "annually">("monthly")
   const [weekSchedules, setWeekSchedules] = useState<any[]>([])
+  const [weekAttendance, setWeekAttendance] = useState<any[]>([])
 
   // Fetch Firestore data on mount
   useEffect(() => {
@@ -274,37 +276,69 @@ export default function ReportsPage() {
     return date.toISOString().split('T')[0]
   }
 
-  // Fetch schedules for the entire week (Monday to Sunday)
+  // Fetch schedules and real attendance for the entire week (Monday to Sunday)
   useEffect(() => {
-    const fetchWeekSchedules = async () => {
+    const fetchWeekData = async () => {
       try {
-        const allWeekSchedules: any[] = []
-        // Fetch schedules for Monday to Sunday
-        for (let i = 0; i < 7; i++) {
-          const dateToFetch = new Date(weekStartDate)
-          dateToFetch.setDate(dateToFetch.getDate() + i)
-          const dateString = getDateString(dateToFetch)
-          const schedules = await getSchedulesForDate(dateString)
-          if (schedules && schedules.length > 0) {
-            const latestSchedule = schedules.sort((a: any, b: any) => {
-              const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-              const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-              return dateB - dateA
-            })[0]
-            allWeekSchedules.push(latestSchedule)
+        // Calculate week end (Sunday)
+        const weekEnd = new Date(weekStartDate)
+        weekEnd.setDate(weekEnd.getDate() + 6)
+        const weekStartStr = getDateString(weekStartDate)
+        const weekEndStr = getDateString(weekEnd)
+
+        // Fetch schedules by weekStart (single query)
+        let allWeekSchedules: any[] = []
+        try {
+          const res = await fetch(`/api/schedules?weekStart=${weekStartStr}`)
+          if (res.ok) {
+            const schedules = await res.json()
+            // Deduplicate by scheduleFor, keeping latest per day
+            const byDate: Record<string, any> = {}
+            for (const sched of schedules) {
+              const targetDate = sched.scheduleFor || sched.date
+              const existing = byDate[targetDate]
+              if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
+                byDate[targetDate] = sched
+              }
+            }
+            allWeekSchedules = Object.values(byDate)
           }
+        } catch (e) {
+          console.warn('Error fetching week schedules:', e)
         }
+
+        // Fetch real attendance from daily_attendance table
+        let attendanceRecords: any[] = []
+        try {
+          attendanceRecords = await getAttendanceForDateRange(weekStartStr, weekEndStr)
+        } catch (e) {
+          console.warn('Error fetching week attendance:', e)
+        }
+
         setWeekSchedules(allWeekSchedules)
-        console.log('Week schedules loaded:', allWeekSchedules.length, 'days')
+        setWeekAttendance(attendanceRecords)
+        console.log('Week schedules loaded:', allWeekSchedules.length, 'days, attendance:', attendanceRecords.length, 'records')
       } catch (error) {
-        console.error('Error fetching week schedules:', error)
+        console.error('Error fetching week data:', error)
         setWeekSchedules([])
+        setWeekAttendance([])
       }
     }
-    fetchWeekSchedules()
+    fetchWeekData()
   }, [weekStartDate])
 
-  // Generate historical attendance data for the entire week from Firestore schedules
+  // Build a lookup: employeeId_date -> "present"|"absent" from real attendance records
+  const attendanceLookup = useMemo(() => {
+    const lookup: Record<string, string> = {}
+    for (const rec of weekAttendance) {
+      const dateStr = typeof rec.date === 'string' && rec.date.includes('T') ? rec.date.split('T')[0] : rec.date
+      lookup[`${rec.employeeId}_${dateStr}`] = rec.status
+    }
+    return lookup
+  }, [weekAttendance])
+
+  // Generate historical attendance data for the entire week
+  // Cross-references schedule assignments with actual daily_attendance records
   const attendanceHistory = useMemo(() => {
     const branchEmployees: Record<string, any[]> = {}
     
@@ -314,7 +348,7 @@ export default function ReportsPage() {
       branchEmployees[branch.branchName] = []
     })
 
-    // Count attendance across the week
+    // Count attendance across the week using REAL attendance data
     const employeeAttendance: Record<string, { present: number; total: number }> = {}
 
     // Initialize attendance tracking for all employees
@@ -325,15 +359,19 @@ export default function ReportsPage() {
     // Count presence for each day in the week
     weekSchedules.forEach((schedule: any) => {
       if (schedule && schedule.branchAssignments) {
+        const scheduleDate = schedule.scheduleFor || schedule.date
         schedule.branchAssignments.forEach((branchAssignment: any) => {
           const employees = branchAssignment.employees || []
           employees.forEach((emp: any) => {
             const empId = String(emp.employeeId)
             if (employeeAttendance[empId]) {
               employeeAttendance[empId].total++
-              if (emp.isPresent === true) {
+              // Check real attendance from daily_attendance table
+              const realStatus = attendanceLookup[`${empId}_${scheduleDate}`]
+              if (realStatus === 'present') {
                 employeeAttendance[empId].present++
               }
+              // If no attendance record exists, count as absent (not present)
             }
           })
         })
@@ -362,7 +400,7 @@ export default function ReportsPage() {
         presentCount: employees.filter((emp: any) => emp.wasPresent).length,
         absentCount: employees.filter((emp: any) => !emp.wasPresent).length,
       }))
-  }, [weekSchedules, crews, branches])
+  }, [weekSchedules, weekAttendance, attendanceLookup, crews, branches])
 
   // Calculate overall attendance for the week
   const overallAttendance = useMemo(() => {
@@ -374,7 +412,7 @@ export default function ReportsPage() {
     return { presentCount, totalCount, rate, absentCount: totalCount - presentCount }
   }, [attendanceHistory])
 
-  // Calculate crew allocation by branch from schedules
+  // Calculate crew allocation by branch from schedules + real attendance
   const crewAllocationByBranch = useMemo(() => {
     const allocationMap = new Map<string, { fullTime: number; partTime: number; total: number; presentCount: number }>()
 
@@ -386,22 +424,21 @@ export default function ReportsPage() {
     // Count employees by type from all schedules
     weekSchedules.forEach((schedule: any) => {
       if (schedule && schedule.branchAssignments) {
+        const scheduleDate = schedule.scheduleFor || schedule.date
         schedule.branchAssignments.forEach((branchAssignment: any) => {
           const branchName = branchAssignment.branchName
           const employees = branchAssignment.employees || []
-          
+
           if (!allocationMap.has(branchName)) {
             allocationMap.set(branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
           }
 
           const branchData = allocationMap.get(branchName)!
-          
+
           employees.forEach((emp: any) => {
             const empId = String(emp.employeeId)
-            // Find the employee in the crews list to get their type
-            const employeeRecord = crews.find((c) => String(c.id) === empId)
-            
-            // Count by employee type
+            const employeeRecord = crews.find((c: any) => String(c.id) === empId)
+
             if (employeeRecord) {
               if (employeeRecord.type === "full-time") {
                 branchData.fullTime++
@@ -409,9 +446,11 @@ export default function ReportsPage() {
                 branchData.partTime++
               }
             }
-            
+
             branchData.total++
-            if (emp.isPresent === true) {
+            // Use real attendance data instead of always-true isPresent
+            const realStatus = attendanceLookup[`${empId}_${scheduleDate}`]
+            if (realStatus === 'present') {
               branchData.presentCount++
             }
           })
@@ -430,7 +469,7 @@ export default function ReportsPage() {
         attendanceRate,
       }
     })
-  }, [weekSchedules, crews, branches])
+  }, [weekSchedules, weekAttendance, attendanceLookup, crews, branches])
 
   // Calculate branch distribution from Firestore schedules
   const branchDistributionData = useMemo(() => {
@@ -479,21 +518,23 @@ export default function ReportsPage() {
       for (let i = 0; i < 7; i++) {
         const dateToCheck = new Date(weekStartDate)
         dateToCheck.setDate(dateToCheck.getDate() + i)
+        const dateISO = getDateString(dateToCheck)
         
-        // Find schedule for this day
+        // Find schedule for this day by scheduleFor
         const daySchedule = weekSchedules.find((schedule: any) => {
-          const scheduleDate = new Date(schedule.date)
-          return scheduleDate.toDateString() === dateToCheck.toDateString()
+          const targetDate = schedule.scheduleFor || schedule.date
+          return targetDate === dateISO
         })
 
         if (daySchedule && daySchedule.branchAssignments) {
-          // Count actual attendance from the schedule
+          // Count real attendance from daily_attendance table
           let present = 0
           let absent = 0
           daySchedule.branchAssignments.forEach((branch: any) => {
             const employees = branch.employees || []
             employees.forEach((emp: any) => {
-              if (emp.isPresent === true) {
+              const realStatus = attendanceLookup[`${emp.employeeId}_${dateISO}`]
+              if (realStatus === 'present') {
                 present++
               } else {
                 absent++
@@ -538,7 +579,8 @@ export default function ReportsPage() {
       // Scan all schedules to find weeks with attendance
       weekSchedules.forEach((schedule: any) => {
         if (schedule && schedule.branchAssignments) {
-          const scheduleDate = new Date(schedule.date)
+          const schedDateStr = schedule.scheduleFor || schedule.date
+          const scheduleDate = new Date(schedDateStr + "T00:00:00")
           const weekStart = getWeekStart(scheduleDate)
           const weekLabel = `Week ${format(weekStart, "w")} (${format(weekStart, "MMM d")})`
           const weekKey = weekLabel
@@ -547,12 +589,13 @@ export default function ReportsPage() {
             weeksMap.set(weekKey, { label: weekLabel, present: 0, absent: 0, date: weekStart })
           }
 
-          // Count attendance for this day
+          // Count real attendance for this day
           const weekData = weeksMap.get(weekKey)!
           schedule.branchAssignments.forEach((branch: any) => {
             const employees = branch.employees || []
             employees.forEach((emp: any) => {
-              if (emp.isPresent === true) {
+              const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+              if (realStatus === 'present') {
                 weekData.present++
               } else {
                 weekData.absent++
@@ -621,16 +664,18 @@ export default function ReportsPage() {
     const monthPresentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     const monthAbsentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-    // Aggregate attendance data from all schedules grouped by month
+    // Aggregate real attendance data from all schedules grouped by month
     weekSchedules.forEach((schedule: any) => {
-      if (schedule && schedule.branchAssignments && schedule.date) {
-        const scheduleDate = new Date(schedule.date)
+      if (schedule && schedule.branchAssignments) {
+        const schedDateStr = schedule.scheduleFor || schedule.date
+        const scheduleDate = new Date(schedDateStr + "T00:00:00")
         const monthIndex = scheduleDate.getMonth() // 0-11
 
         schedule.branchAssignments.forEach((branch: any) => {
           const employees = branch.employees || []
           employees.forEach((emp: any) => {
-            if (emp.isPresent === true) {
+            const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+            if (realStatus === 'present') {
               monthPresentData[monthIndex]++
             } else {
               monthAbsentData[monthIndex]++
@@ -659,7 +704,7 @@ export default function ReportsPage() {
         },
       ],
     }
-  }, [crews.length, timeRange, weekSchedules, weekStartDate])
+  }, [crews.length, timeRange, weekSchedules, weekStartDate, attendanceLookup])
 
   // Generate restaurant deployment data
   const restaurantDeploymentData = useMemo(() => {
