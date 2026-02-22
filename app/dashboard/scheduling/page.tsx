@@ -277,10 +277,20 @@ export default function SchedulingPage() {
   // rotatedEmployees holds a preview (if any). Start empty so the app does NOT automatically shuffle on reload.
   // Note: previews are not auto-generated; Regenerate updates current assignments directly.
   const [rotatedEmployees, setRotatedEmployees] = useState<Array<any>>([])
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false)
 
   // Clear any existing preview when the underlying store data changes (so a stale preview
   // isn't shown after branches/crews are edited). Do NOT regenerate automatically.
+  // Skip the initial load (when fireEmployees arrives async) to avoid wiping out state.
   useEffect(() => {
+    if (!initialDataLoaded) {
+      // Mark as loaded once we have both crews and branches
+      if (crews.length > 0 && branchesList.length > 0) {
+        setInitialDataLoaded(true)
+      }
+      return
+    }
+    // Only clear on subsequent changes (actual edits to branches/crews)
     setRotatedEmployees([])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crews.length, branchesList.length])
@@ -335,66 +345,66 @@ export default function SchedulingPage() {
   // Fetch current week's schedule and load it into appliedRotation
   const fetchCurrentWeekSchedule = async () => {
     try {
-      // Look for any saved schedule within the current week (Mon-Sun) and use the latest one
       const todayDate = new Date()
       const day = todayDate.getDay()
       const monday = new Date(todayDate)
       monday.setDate(todayDate.getDate() - day + (day === 0 ? -6 : 1))
+      const mondayISO = formatDateLocal(monday)
 
-      let foundSchedules: Array<any> = []
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday)
-        d.setDate(monday.getDate() + i)
-        const iso = formatDateLocal(d)
-        try {
-          const schedules = await getSchedulesForDateFromFirestore(iso)
-          console.log("[Fetch Schedules] Query for", iso, "found", schedules?.length || 0, "documents")
-          if (schedules && schedules.length > 0) {
-            // Use document's own scheduleFor if available, otherwise use query date
-            schedules.forEach((s: any) => {
-              s._scheduleDate = s.scheduleFor || iso
-              console.log("[Fetch Schedules] Document:", { date: s.date, scheduleFor: s.scheduleFor, weekStart: s.weekStart, weekEnd: s.weekEnd, _scheduleDate: s._scheduleDate })
-            })
-            foundSchedules = foundSchedules.concat(schedules)
-          }
-        } catch (e) {
-          console.warn("Error fetching schedules for", iso, e)
-        }
+      // Single query by weekStart instead of 7 per-day queries
+      const res = await fetch(`/api/schedules?weekStart=${mondayISO}`)
+      if (!res.ok) {
+        console.warn("[Fetch Schedules] API returned", res.status)
+        return
       }
 
-      console.log("[Fetch Schedules] Total found:", foundSchedules.length, "documents")
-      if (foundSchedules.length > 0) {
-        // pick the most recently updated/created schedule among all found
-        const latestSchedule = foundSchedules.sort((a: any, b: any) => {
-          const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-          const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-          return dateB - dateA
-        })[0]
-        console.log("[Fetch Schedules] Latest schedule:", { date: latestSchedule.date, scheduleFor: latestSchedule.scheduleFor, weekStart: latestSchedule.weekStart, weekEnd: latestSchedule.weekEnd, _scheduleDate: latestSchedule._scheduleDate })
+      const allSchedules = await res.json()
+      console.log("[Fetch Schedules] weekStart query for", mondayISO, "found", allSchedules?.length || 0, "documents")
 
-        if (latestSchedule.branchAssignments && latestSchedule.branchAssignments.length > 0) {
-          const rotationData: any[] = []
-          for (const branchAssignment of latestSchedule.branchAssignments) {
-            for (const employee of branchAssignment.employees) {
-              rotationData.push({
-                id: employee.employeeId,
-                firstName: employee.employeeName ? employee.employeeName.split(" ")[0] : "Unknown",
-                surname: employee.employeeName ? employee.employeeName.split(" ").slice(1).join(" ") : "",
-                nextWeekBranch: branchAssignment.branchName,
-                nextWeekShift: formatShift(employee.shift),
-              })
-            }
+      if (!Array.isArray(allSchedules) || allSchedules.length === 0) {
+        console.log("[Fetch Schedules] No schedules found for current week")
+        return
+      }
+
+      // Pick the latest schedule (by updatedAt) to extract rotation data
+      const latestSchedule = allSchedules.sort((a: any, b: any) => {
+        const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
+        const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
+        return dateB - dateA
+      })[0]
+
+      console.log("[Fetch Schedules] Latest schedule:", { date: latestSchedule.date, scheduleFor: latestSchedule.scheduleFor, weekStart: latestSchedule.weekStart, weekEnd: latestSchedule.weekEnd })
+
+      // Parse branchAssignments (could be string from DB)
+      let branchAssignments = latestSchedule.branchAssignments
+      if (typeof branchAssignments === "string") {
+        try { branchAssignments = JSON.parse(branchAssignments) } catch { branchAssignments = null }
+      }
+
+      if (Array.isArray(branchAssignments) && branchAssignments.length > 0) {
+        // Deduplicate employees by ID across branches (in case of overlapping data)
+        const seenIds = new Set<string>()
+        const rotationData: any[] = []
+        for (const branchAssignment of branchAssignments) {
+          for (const employee of (branchAssignment.employees || [])) {
+            const empId = String(employee.employeeId)
+            if (seenIds.has(empId)) continue
+            seenIds.add(empId)
+            rotationData.push({
+              id: empId,
+              firstName: employee.employeeName ? employee.employeeName.split(" ")[0] : "Unknown",
+              surname: employee.employeeName ? employee.employeeName.split(" ").slice(1).join(" ") : "",
+              nextWeekBranch: branchAssignment.branchName,
+              nextWeekShift: formatShift(employee.shift),
+            })
           }
-          setAppliedRotation(rotationData)
-          // Always calculate week bounds from the schedule date to ensure consistency
-          const scheduleDate = latestSchedule._scheduleDate || latestSchedule.scheduleFor || latestSchedule.date
-          console.log("[Schedule Week] Schedule date:", scheduleDate)
-
-          const weekBounds = getWeekBoundsFromDate(scheduleDate)
-          console.log("[Schedule Week] Calculated week bounds:", weekBounds)
-          setAppliedScheduleWeek(weekBounds)
-          console.log("Current week schedule loaded from week:", latestSchedule._scheduleDate, rotationData.length, "assignments")
         }
+        setAppliedRotation(rotationData)
+
+        const scheduleDate = latestSchedule.scheduleFor || latestSchedule.date
+        const weekBounds = getWeekBoundsFromDate(scheduleDate)
+        setAppliedScheduleWeek(weekBounds)
+        console.log("[Fetch Schedules] Loaded", rotationData.length, "assignments for week", weekBounds.weekStart, "-", weekBounds.weekEnd)
       }
     } catch (err) {
       console.error("Error fetching current week schedule:", err)
@@ -610,8 +620,9 @@ export default function SchedulingPage() {
       setUndoAvailable(true)
       showNotification("success", "Rotation Applied", "Current schedules have been rotated successfully. You can undo within 10s.")
 
-      // Refresh the week schedules display
+      // Refresh both the week schedules display AND the appliedRotation from DB
       await fetchWeekSchedulesFromFirestore()
+      await fetchCurrentWeekSchedule()
 
       // Generate a next-week preview so the "Next Week's Rotation" card is populated
       const nextWeekPreview = generateRotation({ avoidSameBranch: true })
@@ -1113,7 +1124,7 @@ export default function SchedulingPage() {
               <div className="flex gap-2">
                 <Button
                   onClick={handleRegenerate}
-                  disabled={branchesList.length === 0 || crews.length === 0}
+                  disabled={branchesList.length === 0 || (crews.length === 0 && fireEmployees.length === 0)}
                 >
                   Generate New Rotation
                 </Button>
@@ -1656,10 +1667,10 @@ export default function SchedulingPage() {
                   Cancel
                 </Button>
                 <Button
-                  disabled={branchesList.length === 0 || crews.length === 0}
+                  disabled={branchesList.length === 0 || (crews.length === 0 && fireEmployees.length === 0)}
                   onClick={async () => {
                     console.log("[Apply Rotation Button] Clicked - Starting handler...")
-                    if (branchesList.length === 0 || crews.length === 0) {
+                    if (branchesList.length === 0 || (crews.length === 0 && fireEmployees.length === 0)) {
                       console.log("[Apply Rotation Button] Validation failed: branches or crews missing")
                       showNotification(
                         "error",
