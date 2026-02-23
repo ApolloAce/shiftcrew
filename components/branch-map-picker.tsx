@@ -41,6 +41,8 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
   const mapRef = useRef<any>(null)
   const markerRef = useRef<any>(null)
   const circleRef = useRef<any>(null)
+  const handleMapClickRef = useRef<(lat: number, lng: number) => void>(() => {})
+  const onChangeRef = useRef(onChange)
   const [L, setL] = useState<any>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [isSearching, setIsSearching] = useState(false)
@@ -101,12 +103,12 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
 
       marker.on("dragend", () => {
         const pos = marker.getLatLng()
-        handleMapClick(pos.lat, pos.lng)
+        handleMapClickRef.current(pos.lat, pos.lng)
       })
     }
 
     map.on("click", (e: any) => {
-      handleMapClick(e.latlng.lat, e.latlng.lng)
+      handleMapClickRef.current(e.latlng.lat, e.latlng.lng)
     })
 
     mapRef.current = map
@@ -127,6 +129,7 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
   }, [currentRadius, L])
 
   const handleMapClick = useCallback(async (lat: number, lng: number) => {
+    // This function is also accessed via handleMapClickRef for stable event handlers
     if (!L || !mapRef.current) return
 
     // Clamp to Philippines bounds
@@ -149,7 +152,7 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
       const marker = L.marker([lat, lng], { icon, draggable: true }).addTo(mapRef.current)
       marker.on("dragend", () => {
         const pos = marker.getLatLng()
-        handleMapClick(pos.lat, pos.lng)
+        handleMapClickRef.current(pos.lat, pos.lng)
       })
       markerRef.current = marker
     }
@@ -171,48 +174,56 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
     // Reverse geocode using Nominatim (free, no API key)
     setIsReversing(true)
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-        { headers: { "Accept-Language": "en" } }
-      )
+      const res = await fetch(`/api/geocode?lat=${lat}&lon=${lng}`)
+      if (!res.ok) throw new Error(`Geocode API error ${res.status}`)
       const data = await res.json()
       const addr = data.address || {}
       const displayName = data.display_name || ""
       const city = addr.city || addr.town || addr.municipality || addr.village || ""
       const province = addr.state || addr.province || addr.region || ""
 
-      onChange({
+      const result = {
         latitude: lat,
         longitude: lng,
         address: displayName,
         city,
         province,
         radius: currentRadius,
-      })
+      }
+      console.log("[MapPicker] Reverse geocode result:", result)
+      onChangeRef.current(result)
     } catch (err) {
-      console.error("Reverse geocode error:", err)
-      onChange({
+      console.error("[MapPicker] Reverse geocode error:", err)
+      const fallback = {
         latitude: lat,
         longitude: lng,
         address: value?.address || "",
         city: value?.city || "",
         province: value?.province || "",
         radius: currentRadius,
-      })
+      }
+      console.log("[MapPicker] Using fallback:", fallback)
+      onChangeRef.current(fallback)
     } finally {
       setIsReversing(false)
     }
-  }, [L, currentRadius, onChange, value?.address, value?.city, value?.province])
+  }, [L, currentRadius, value?.address, value?.city, value?.province])
+
+  // Keep refs always pointing to the latest callbacks
+  useEffect(() => {
+    handleMapClickRef.current = handleMapClick
+  }, [handleMapClick])
+  useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
 
   // Search location by name (Nominatim)
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !mapRef.current) return
     setIsSearching(true)
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery + ", Philippines")}&limit=1&addressdetails=1`,
-        { headers: { "Accept-Language": "en" } }
-      )
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(searchQuery + ", Philippines")}`)
+      if (!res.ok) throw new Error(`Geocode API error ${res.status}`)
       const results = await res.json()
       if (results.length > 0) {
         const r = results[0]
@@ -230,7 +241,7 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
 
   const handleRadiusChange = useCallback((radiusStr: string) => {
     const newRadius = parseInt(radiusStr, 10)
-    onChange({
+    onChangeRef.current({
       latitude: value?.latitude ?? PH_CENTER.lat,
       longitude: value?.longitude ?? PH_CENTER.lng,
       address: value?.address || "",
@@ -238,7 +249,7 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
       province: value?.province || "",
       radius: newRadius,
     })
-  }, [onChange, value])
+  }, [value])
 
   return (
     <div className="space-y-3">
@@ -287,8 +298,8 @@ export default function BranchMapPicker({ value, onChange, height = "400px" }: B
           <Label>Coordinates</Label>
           <div className="flex items-center gap-1 text-sm text-muted-foreground h-10 px-3 border rounded-md bg-muted/30">
             <MapPin className="h-3.5 w-3.5 shrink-0" />
-            {value?.latitude
-              ? `${value.latitude.toFixed(5)}, ${value.longitude?.toFixed(5)}`
+            {value?.latitude && typeof value.latitude === "number"
+              ? `${value.latitude.toFixed(5)}, ${(Number(value.longitude) || 0).toFixed(5)}`
               : "Click on the map to set location"}
           </div>
         </div>

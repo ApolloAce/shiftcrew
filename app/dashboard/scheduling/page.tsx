@@ -532,6 +532,8 @@ export default function SchedulingPage() {
       // Build assignments for the regenerated rotation
       const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
 
+      console.log("[Regenerate] branchesList:", branchesList.length, "branches:", branchesList.map(b => b.name))
+
       for (const emp of next) {
         // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
         const targetBranch = fireBranches.find((b: any) => b.branchName === emp.nextWeekBranch || b.name === emp.nextWeekBranch)
@@ -571,6 +573,18 @@ export default function SchedulingPage() {
             branchName,
             shift: emp.shift || "AM",
           })
+
+          // Persist branchId to the database (users table)
+          try {
+            await fetch("/api/employees", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: employeeId, branchId }),
+            })
+            console.log("[Regenerate] Persisted branchId to DB:", employeeName, "->", branchName)
+          } catch (err) {
+            console.error("[Regenerate] Failed to persist branchId for", employeeName, err)
+          }
         }
       }
 
@@ -1795,10 +1809,21 @@ export default function SchedulingPage() {
                         })
                         console.log("[Apply Rotation Button] Added assignment:", employeeName, "->", branchName)
 
-                        // Also update current assignment so the applied preview becomes the current rotation
-                        // Use storeCrewId (numeric) if available since the Zustand store expects numeric IDs
+                        // Update Zustand store for backward compatibility
                         const storeId = emp.storeCrewId ?? emp.id
                         assignCrewToBranch(storeId, targetBranch.id)
+
+                        // Persist branchId to the database (users table)
+                        try {
+                          await fetch("/api/employees", {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ id: String(emp.id), branchId: String(targetBranch.id) }),
+                          })
+                          console.log("[Apply Rotation] Persisted branchId to DB:", employeeName, "->", branchName)
+                        } catch (err) {
+                          console.error("[Apply Rotation] Failed to persist branchId for", employeeName, err)
+                        }
                       } else {
                         console.warn("[Apply Rotation Button] No matching branch found for:", emp.nextWeekBranch)
                       }
@@ -2101,7 +2126,11 @@ export default function SchedulingPage() {
                   } else {
                     // Show specific branch with its employees
                     const selectedBranch = fireBranches.find((b) => String(b.id) === selectedBranchForDisplay)
-                    if (!selectedBranch) return <div className="text-center py-8 text-muted-foreground">Branch not found</div>
+                    if (!selectedBranch) {
+                      // Branch was deleted — reset filter
+                      setSelectedBranchForDisplay(null)
+                      return <div className="text-center py-8 text-muted-foreground">Branch no longer exists. Showing all branches.</div>
+                    }
 
                     // Prefer Firestore employees for the selected branch
                     const assignedCrews = fireEmployees.length > 0
