@@ -32,8 +32,20 @@ export async function POST(req: Request) {
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
     await execute(
-      "INSERT INTO branches (id, branchName, address, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)",
-      [id, body.branchName, body.address || null, now, now]
+      `INSERT INTO branches (id, branchName, address, latitude, longitude, city, province, radius, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        body.branchName,
+        body.address || null,
+        body.latitude ?? null,
+        body.longitude ?? null,
+        body.city || null,
+        body.province || null,
+        body.radius ?? 100,
+        now,
+        now,
+      ]
     );
 
     return NextResponse.json({ id }, { status: 201 });
@@ -51,7 +63,7 @@ export async function PUT(req: Request) {
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
 
     // Filter out read-only / auto-managed fields to prevent duplicate SET clauses
-    const allowedFields = ["branchName", "address"];
+    const allowedFields = ["branchName", "address", "latitude", "longitude", "city", "province", "radius"];
     const setClauses: string[] = [];
     const params: any[] = [];
 

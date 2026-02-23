@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { format } from "date-fns"
-import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert, Camera, Loader2, CheckCircle, XCircle } from "lucide-react"
+import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert, Navigation, Loader2, CheckCircle, XCircle } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { getCurrentPosition, checkSpoofIndicators, type GeoResult, type GeoError } from "@/lib/geolocation-helper"
 
 export default function EmployeeDashboard() {
   const { showNotification } = useNotification()
@@ -26,12 +27,12 @@ export default function EmployeeDashboard() {
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([])
   const [accountStatus, setAccountStatus] = useState<"pending" | "approved" | "rejected" | undefined>(undefined)
 
-  // Unified clock-in/out modal state
+  // Location-based clock-in/out modal state
   const [showClockInModal, setShowClockInModal] = useState(false)
   const [showClockOutModal, setShowClockOutModal] = useState(false)
-  const [cameraStatus, setCameraStatus] = useState<"waiting" | "active" | "captured" | "error">("waiting")
-  const [locationStatus, setLocationStatus] = useState<"checking" | "valid" | "error">("checking")
-  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
+  const [locationStatus, setLocationStatus] = useState<"idle" | "checking" | "valid" | "rejected" | "error">("idle")
+  const [locationMessage, setLocationMessage] = useState("")
+  const [locationDistance, setLocationDistance] = useState<number | null>(null)
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number; accuracy: number } | null>(null)
 
   // Load all data from API endpoints
@@ -122,137 +123,89 @@ export default function EmployeeDashboard() {
     }
   }, [])
 
-  // --- Unified camera capture (robust, works on mobile + desktop) ---
-  const capturePhoto = async (): Promise<boolean> => {
-    setCameraStatus("active")
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
-      setCameraStatus("error")
-      return false
-    }
-
-    try {
-      let stream: MediaStream
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        })
-      } catch (constraintError: any) {
-        if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        } else {
-          throw constraintError
-        }
-      }
-
-      const video = document.createElement("video")
-      video.setAttribute("autoplay", "")
-      video.setAttribute("playsinline", "")
-      video.setAttribute("muted", "")
-      video.muted = true
-      video.srcObject = stream
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
-        video.onloadeddata = () => { clearTimeout(timeout); resolve() }
-        video.onerror = () => { clearTimeout(timeout); reject(new Error("Video element error")) }
-      })
-
-      await video.play()
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      if (!video.videoWidth || !video.videoHeight) {
-        stream.getTracks().forEach((track) => track.stop())
-        showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again.")
-        setCameraStatus("error")
-        return false
-      }
-
-      const canvas = document.createElement("canvas")
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      const ctx = canvas.getContext("2d")
-      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-      const photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
-      setCapturedPhoto(photoDataUrl)
-      setCameraStatus("captured")
-      stream.getTracks().forEach((track) => track.stop())
-      return true
-    } catch (cameraError: any) {
-      let title = "Camera Error"
-      let message = "Could not access camera. Please try again."
-      if (cameraError.name === "NotAllowedError" || cameraError.name === "PermissionDeniedError") {
-        title = "Camera Permission Denied"
-        message = "Camera access was denied. Please allow camera permissions in your browser settings and try again."
-      } else if (cameraError.name === "NotFoundError" || cameraError.name === "DevicesNotFoundError") {
-        title = "No Camera Found"
-        message = "No camera was detected on this device. Please connect a camera and try again."
-      } else if (cameraError.name === "NotReadableError" || cameraError.name === "TrackStartError") {
-        title = "Camera In Use"
-        message = "The camera is already in use by another application. Please close other apps using the camera."
-      } else if (cameraError.message === "Camera timed out") {
-        title = "Camera Timeout"
-        message = "Camera took too long to start. Please check your camera connection and try again."
-      }
-      console.error("Camera error:", cameraError.name, cameraError.message)
-      showNotification("error", title, message)
-      setCameraStatus("error")
-      return false
-    }
-  }
-
   // --- Modal openers ---
   const handleClockInAttempt = () => {
     setShowClockInModal(true)
-    setCameraStatus("waiting")
-    setLocationStatus("checking")
-    setCapturedPhoto(null)
+    setLocationStatus("idle")
+    setLocationMessage("")
+    setLocationDistance(null)
     setCurrentLocation(null)
   }
 
   const handleClockOutAttempt = () => {
     setShowClockOutModal(true)
-    setCameraStatus("waiting")
-    setLocationStatus("checking")
-    setCapturedPhoto(null)
+    setLocationStatus("idle")
+    setLocationMessage("")
+    setLocationDistance(null)
     setCurrentLocation(null)
   }
 
-  // --- GPS validation (triggered after photo is captured) ---
-  const handlePhotoSubmit = async () => {
-    if (!capturedPhoto) return
+  // --- Location validation (replaces photo + GPS flow) ---
+  const validateLocation = async (): Promise<boolean> => {
+    if (!currentUser) return false
     setLocationStatus("checking")
+    setLocationMessage("Getting your location...")
 
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        if (!navigator.geolocation) { reject(new Error("Geolocation not supported")); return }
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0,
-        })
-      })
+      // 1. Get GPS position
+      const geoResult = await getCurrentPosition()
       setCurrentLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
+        latitude: geoResult.latitude,
+        longitude: geoResult.longitude,
+        accuracy: geoResult.accuracy,
       })
-      setLocationStatus("valid")
-    } catch (error) {
-      console.error("GPS validation error:", error)
+
+      // Check for spoof indicators
+      const warnings = checkSpoofIndicators(geoResult)
+      if (warnings.length > 0) {
+        console.warn("[Attendance] Spoof indicators:", warnings)
+      }
+
+      setLocationMessage("Verifying your location against branch...")
+
+      // 2. Validate against branch radius via API
+      const res = await fetch("/api/attendance/validate-location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          latitude: geoResult.latitude,
+          longitude: geoResult.longitude,
+          accuracy: geoResult.accuracy,
+        }),
+      })
+
+      const data = await res.json()
+      setLocationDistance(data.distanceMeters ?? null)
+
+      if (data.valid) {
+        setLocationStatus("valid")
+        setLocationMessage(`Location verified! You are ${data.distanceMeters}m from ${data.branchName}.`)
+        return true
+      } else {
+        setLocationStatus("rejected")
+        setLocationMessage(data.message || "You are not within the branch attendance zone.")
+        return false
+      }
+    } catch (error: any) {
+      console.error("Location validation error:", error)
       setLocationStatus("error")
-      showNotification("error", "Location Error", "GPS location is required. Please enable location services.")
+      setLocationMessage(error.message || "Failed to get your location. Please enable location services and try again.")
+      return false
     }
   }
 
-  // --- Submit clock-in to API ---
+  // --- Submit clock-in (location-based, no photo) ---
   const submitClockIn = async () => {
-    if (!currentUser || !capturedPhoto) return
+    if (!currentUser) return
     setIsLoading(true)
     try {
+      const isValid = await validateLocation()
+      if (!isValid) {
+        setIsLoading(false)
+        return
+      }
+
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeIn = now.toTimeString().slice(0, 8)
@@ -267,10 +220,10 @@ export default function EmployeeDashboard() {
           date: today,
           status: "present",
           timeIn,
-          photoUrl: capturedPhoto,
           latitude: currentLocation?.latitude || null,
           longitude: currentLocation?.longitude || null,
           branchId: currentUser.branchId || null,
+          branchName: assignedBranch?.branchName || null,
         }),
       })
 
@@ -281,7 +234,7 @@ export default function EmployeeDashboard() {
           setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: "present" }))
         } else {
           setLatestTimeRecord({ date: today, timeIn: data.timeIn || timeIn, status: "present" })
-          showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)} (photo verified).`)
+          showNotification("success", "Clocked In", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}.`)
         }
         setShowClockInModal(false)
       } else {
@@ -296,11 +249,17 @@ export default function EmployeeDashboard() {
     }
   }
 
-  // --- Submit clock-out to API ---
+  // --- Submit clock-out (location-based, no photo) ---
   const submitClockOut = async () => {
-    if (!currentUser || !capturedPhoto) return
+    if (!currentUser) return
     setIsLoading(true)
     try {
+      const isValid = await validateLocation()
+      if (!isValid) {
+        setIsLoading(false)
+        return
+      }
+
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeOut = now.toTimeString().slice(0, 8)
@@ -484,12 +443,12 @@ export default function EmployeeDashboard() {
               <div className="pt-2">
                 {!latestTimeRecord || latestTimeRecord.status !== "present" ? (
                   <Button className="w-full" onClick={handleClockInAttempt} disabled={isLoading}>
-                    <Camera className="mr-2 h-4 w-4" />
+                    <Navigation className="mr-2 h-4 w-4" />
                     Clock In
                   </Button>
                 ) : !latestTimeRecord.timeOut ? (
                   <Button className="w-full" variant="outline" onClick={handleClockOutAttempt} disabled={isLoading}>
-                    <Camera className="mr-2 h-4 w-4" />
+                    <Navigation className="mr-2 h-4 w-4" />
                     Clock Out
                   </Button>
                 ) : (
@@ -583,140 +542,142 @@ export default function EmployeeDashboard() {
         </Card>
       </div>
 
-      {/* Clock-In Verification Modal */}
+      {/* Clock-In Location Modal */}
       <Dialog open={showClockInModal} onOpenChange={setShowClockInModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Clock In Verification</DialogTitle>
-            <DialogDescription>Take a selfie photo, then we'll verify your location</DialogDescription>
+            <DialogTitle>Clock In</DialogTitle>
+            <DialogDescription>Your location will be verified against your assigned branch</DialogDescription>
           </DialogHeader>
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium">1. Take Photo</h4>
-                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
-                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
-              </div>
-              {cameraStatus === "waiting" && (
-                <Button onClick={capturePhoto} className="w-full">
-                  <Camera className="mr-2 h-4 w-4" />
-                  Take Selfie
+          <div className="space-y-4">
+            {locationStatus === "idle" && (
+              <div className="text-center space-y-4 py-4">
+                <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Navigation className="h-8 w-8 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">
+                    Press the button below to verify your location and clock in.
+                    You must be within your assigned branch's attendance zone.
+                  </p>
+                </div>
+                <Button onClick={submitClockIn} disabled={isLoading} className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying Location...</>) : (<><Navigation className="mr-2 h-4 w-4" />Verify Location & Clock In</>)}
                 </Button>
-              )}
-              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
-              {cameraStatus === "captured" && capturedPhoto && (
-                <div className="space-y-2">
-                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
-                  <img src={capturedPhoto} alt="Captured selfie" className="w-32 h-32 object-cover rounded-md mx-auto" />
-                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full">Retake Photo</Button>
-                </div>
-              )}
-              {cameraStatus === "error" && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                  <p className="text-sm text-red-800 dark:text-red-200">Unable to access camera. Please allow camera permissions and try again.</p>
-                  <Button variant="outline" size="sm" className="mt-2" onClick={capturePhoto}>Retry Camera Access</Button>
-                </div>
-              )}
-            </div>
-            {cameraStatus === "captured" && locationStatus === "checking" && (
-              <Button onClick={handlePhotoSubmit} className="w-full">Submit Photo</Button>
-            )}
-            {cameraStatus === "captured" && locationStatus !== "checking" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">2. Location Verification</h4>
-                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
-                </div>
-                {locationStatus === "valid" && (
-                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
-                    <p className="text-sm text-green-800 dark:text-green-200">✓ GPS location verified</p>
-                  </div>
-                )}
-                {locationStatus === "error" && (
-                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">Location access required. Please enable location permissions.</p>
-                    <Button variant="outline" size="sm" className="mt-2" onClick={handlePhotoSubmit}>Retry Location Check</Button>
-                  </div>
-                )}
               </div>
             )}
-            <div className="pt-4 border-t">
-              <Button onClick={submitClockIn} disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading} className="w-full">
-                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : "Confirm Clock In"}
-              </Button>
-            </div>
+
+            {locationStatus === "checking" && (
+              <div className="text-center space-y-3 py-4">
+                <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+                <p className="text-sm text-muted-foreground">{locationMessage}</p>
+              </div>
+            )}
+
+            {locationStatus === "valid" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg text-center">
+                  <CheckCircle className="h-10 w-10 text-green-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-green-800 dark:text-green-200">{locationMessage}</p>
+                  {currentLocation && (
+                    <p className="text-xs text-green-600 mt-1">
+                      Accuracy: ±{Math.round(currentLocation.accuracy)}m
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {locationStatus === "rejected" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-lg text-center">
+                  <XCircle className="h-10 w-10 text-red-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200">{locationMessage}</p>
+                </div>
+                <Button variant="outline" onClick={submitClockIn} disabled={isLoading} className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry Location Check"}
+                </Button>
+              </div>
+            )}
+
+            {locationStatus === "error" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg text-center">
+                  <AlertCircle className="h-10 w-10 text-amber-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">{locationMessage}</p>
+                </div>
+                <Button variant="outline" onClick={submitClockIn} disabled={isLoading} className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry"}
+                </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Clock-Out Verification Modal */}
+      {/* Clock-Out Location Modal */}
       <Dialog open={showClockOutModal} onOpenChange={setShowClockOutModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Clock Out Verification</DialogTitle>
-            <DialogDescription>Take a selfie photo to verify your clock-out</DialogDescription>
+            <DialogTitle>Clock Out</DialogTitle>
+            <DialogDescription>Your location will be verified against your assigned branch</DialogDescription>
           </DialogHeader>
-          <div className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium">1. Take Photo</h4>
-                {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
-                {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
-                {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
-              </div>
-              {cameraStatus === "waiting" && (
-                <Button onClick={capturePhoto} className="w-full">
-                  <Camera className="mr-2 h-4 w-4" />
-                  Take Selfie
+          <div className="space-y-4">
+            {locationStatus === "idle" && (
+              <div className="text-center space-y-4 py-4">
+                <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Navigation className="h-8 w-8 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">
+                    Press the button below to verify your location and clock out.
+                  </p>
+                </div>
+                <Button onClick={submitClockOut} disabled={isLoading} variant="outline" className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying Location...</>) : (<><Navigation className="mr-2 h-4 w-4" />Verify Location & Clock Out</>)}
                 </Button>
-              )}
-              {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
-              {cameraStatus === "captured" && capturedPhoto && (
-                <div className="space-y-2">
-                  <p className="text-sm text-green-600">✓ Photo captured successfully</p>
-                  <img src={capturedPhoto} alt="Captured selfie" className="w-32 h-32 object-cover rounded-md mx-auto" />
-                  <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full">Retake Photo</Button>
-                </div>
-              )}
-              {cameraStatus === "error" && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                  <p className="text-sm text-red-800 dark:text-red-200">Unable to access camera. Please allow camera permissions and try again.</p>
-                  <Button variant="outline" size="sm" className="mt-2" onClick={capturePhoto}>Retry Camera Access</Button>
-                </div>
-              )}
-            </div>
-            {cameraStatus === "captured" && locationStatus === "checking" && (
-              <Button onClick={handlePhotoSubmit} className="w-full">Submit Photo</Button>
-            )}
-            {cameraStatus === "captured" && locationStatus !== "checking" && (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-medium">2. Location Verification</h4>
-                  {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                  {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
-                </div>
-                {locationStatus === "valid" && (
-                  <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
-                    <p className="text-sm text-green-800 dark:text-green-200">✓ GPS location verified</p>
-                  </div>
-                )}
-                {locationStatus === "error" && (
-                  <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                    <p className="text-sm text-amber-800 dark:text-amber-200">Location access required. Please enable location permissions.</p>
-                    <Button variant="outline" size="sm" className="mt-2" onClick={handlePhotoSubmit}>Retry Location Check</Button>
-                  </div>
-                )}
               </div>
             )}
-            <div className="pt-4 border-t">
-              <Button onClick={submitClockOut} disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading} className="w-full">
-                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : "Confirm Clock Out"}
-              </Button>
-            </div>
+
+            {locationStatus === "checking" && (
+              <div className="text-center space-y-3 py-4">
+                <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+                <p className="text-sm text-muted-foreground">{locationMessage}</p>
+              </div>
+            )}
+
+            {locationStatus === "valid" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg text-center">
+                  <CheckCircle className="h-10 w-10 text-green-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-green-800 dark:text-green-200">{locationMessage}</p>
+                </div>
+              </div>
+            )}
+
+            {locationStatus === "rejected" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-lg text-center">
+                  <XCircle className="h-10 w-10 text-red-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-red-800 dark:text-red-200">{locationMessage}</p>
+                </div>
+                <Button variant="outline" onClick={submitClockOut} disabled={isLoading} className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry Location Check"}
+                </Button>
+              </div>
+            )}
+
+            {locationStatus === "error" && (
+              <div className="space-y-3 py-2">
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg text-center">
+                  <AlertCircle className="h-10 w-10 text-amber-600 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">{locationMessage}</p>
+                </div>
+                <Button variant="outline" onClick={submitClockOut} disabled={isLoading} className="w-full">
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry"}
+                </Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>

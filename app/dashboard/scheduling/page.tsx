@@ -304,19 +304,11 @@ export default function SchedulingPage() {
         setFireEmployees(e)
         console.log("Firestore branches/employees loaded:", b.length, e.length)
 
-        // Initialize manualAssignments from employees' persisted branchId
-        const initialAssignments: Record<string, string> = {}
-        for (const emp of e) {
-          if (emp.branchId) {
-            const branch = b.find((br: any) => String(br.id) === String(emp.branchId))
-            if (branch) {
-              initialAssignments[String(emp.id)] = branch.branchName
-            }
-          }
-        }
-        if (Object.keys(initialAssignments).length > 0) {
-          setManualAssignments((prev) => ({ ...initialAssignments, ...prev }))
-        }
+        // NOTE: Do NOT pre-populate manualAssignments from employees' persisted branchId.
+        // That would lock every employee to their current branch during rotation.
+        // The employee's currentBranch is already determined inside generateRotation()
+        // via the branchId lookup, which feeds the avoidSameBranch logic.
+        // manualAssignments should only contain user-initiated manual overrides from the UI.
       } catch (err) {
         console.error("Error loading Firestore scheduling data:", err)
       }

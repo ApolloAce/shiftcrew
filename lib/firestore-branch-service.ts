@@ -4,6 +4,11 @@ export type Branch = {
   id: string
   branchName: string
   address: string
+  latitude?: number | null
+  longitude?: number | null
+  city?: string | null
+  province?: string | null
+  radius?: number // meters, default 100
   createdAt?: string
   updatedAt?: string
 }
