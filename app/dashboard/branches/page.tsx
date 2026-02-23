@@ -158,15 +158,18 @@ export default function BranchesPage() {
 
       openConfirmDialog({
         title: "Delete this branch?",
-        description: "This action cannot be undone. This will permanently delete the branch and remove it from the system.",
-        confirmLabel: "Delete",
+        description: `This action cannot be undone. This will permanently delete the branch "${name}" and ALL employees assigned to it, including their attendance records.`,
+        confirmLabel: "Delete Branch & Employees",
         confirmVariant: "bg-red-600 hover:bg-red-700",
         onConfirm: async () => {
           try {
-            await deleteBranchFromFirestore(branchId)
+            const res = await fetch(`/api/branches?id=${branchId}`, { method: "DELETE" })
+            const data = await res.json()
+            if (!res.ok) throw new Error(data.message || "Failed to delete branch")
             const updatedBranches = await getAllBranches()
             setBranches(updatedBranches)
-            showNotification("info", "Branch Deleted", `Branch "${name}" has been deleted successfully.`)
+            const empMsg = data.deletedEmployees > 0 ? ` and ${data.deletedEmployees} employee(s)` : ""
+            showNotification("info", "Branch Deleted", `Branch "${name}"${empMsg} deleted successfully.`)
           } catch (error) {
             console.error("Error deleting branch:", error)
             showNotification("error", "Error", "Failed to delete branch")

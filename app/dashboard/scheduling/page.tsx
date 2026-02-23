@@ -116,6 +116,7 @@ export default function SchedulingPage() {
   const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
   const [pendingAssignments, setPendingAssignments] = useState<Record<string, string>>({})
   const [weeklyOverrides, setWeeklyOverrides] = useState<any[]>([])
+  const [weekAttendance, setWeekAttendance] = useState<Record<string, any[]>>({})
   const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set([0]))
   const [weekSchedules, setWeekSchedules] = useState<Record<string, any>>({})
 
@@ -329,9 +330,40 @@ export default function SchedulingPage() {
     }
   }
 
+  // Fetch actual attendance records for the current week
+  const fetchWeekAttendance = async () => {
+    try {
+      const today = new Date()
+      const dayOfWeek = today.getDay()
+      const monday = new Date(today)
+      monday.setDate(today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1))
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      const startDate = formatDateLocal(monday)
+      const endDate = formatDateLocal(sunday)
+
+      const res = await fetch(`/api/attendance?startDate=${startDate}&endDate=${endDate}`)
+      if (!res.ok) return
+      const records: any[] = await res.json()
+
+      // Group by date
+      const byDate: Record<string, any[]> = {}
+      for (const rec of records) {
+        const d = rec.date?.split("T")[0] || rec.date
+        if (!byDate[d]) byDate[d] = []
+        byDate[d].push(rec)
+      }
+      setWeekAttendance(byDate)
+      console.log("[Attendance] Loaded", records.length, "records for week", startDate, "-", endDate)
+    } catch (err) {
+      console.error("Error fetching week attendance:", err)
+    }
+  }
+
   useEffect(() => {
     fetchWeeklyOverrides()
     fetchWeekSchedulesFromFirestore()
+    fetchWeekAttendance()
   }, [])
 
   // Fetch current week's schedule and load it into appliedRotation
@@ -1334,7 +1366,32 @@ export default function SchedulingPage() {
 
                       const assignments = schedule.branchAssignments || []
                       const totalCrew = assignments.reduce((sum: number, ba: any) => sum + (ba.employees?.length || 0), 0)
-                      const absentCount = weeklyOverrides.filter((o: any) => o.date === dateISO).length
+                      const dayAttendance = weekAttendance[dateISO] || []
+                      const todayMidnight = new Date(); todayMidnight.setHours(0, 0, 0, 0)
+                      const dayDate = new Date(currentDate); dayDate.setHours(0, 0, 0, 0)
+                      const isPastDay = dayDate < todayMidnight
+                      const isToday = dayDate.getTime() === todayMidnight.getTime()
+
+                      // Count statuses for summary
+                      let presentCount = 0
+                      let absentCount = 0
+                      for (const ba of assignments) {
+                        for (const emp of (ba.employees || [])) {
+                          const hasOverride = weeklyOverrides.some(
+                            (o: any) => String(o.employeeId) === String(emp.employeeId) && o.date === dateISO
+                          )
+                          const attRecord = dayAttendance.find(
+                            (a: any) => String(a.employeeId) === String(emp.employeeId)
+                          )
+                          if (hasOverride) {
+                            absentCount++
+                          } else if (attRecord && attRecord.timeIn) {
+                            presentCount++
+                          } else if (isPastDay) {
+                            absentCount++
+                          }
+                        }
+                      }
 
                       details.push(
                         <div key={i} className="border rounded-lg">
@@ -1352,7 +1409,12 @@ export default function SchedulingPage() {
                           >
                             <div className="flex items-center gap-2 flex-1 text-left">
                               <div className="text-sm font-medium">{dayName}, {dateStr}</div>
-                              <div className="text-xs text-muted-foreground">({totalCrew} crew{absentCount > 0 ? `, ${absentCount} absent` : ""})</div>
+                              <div className="text-xs text-muted-foreground">
+                                ({totalCrew} crew
+                                {presentCount > 0 ? `, ${presentCount} present` : ""}
+                                {absentCount > 0 ? `, ${absentCount} absent` : ""}
+                                {!isPastDay && !isToday && presentCount === 0 && absentCount === 0 ? ", scheduled" : ""})
+                              </div>
                             </div>
                             <div className="text-xs text-muted-foreground">{isExpanded ? "▼" : "▶"}</div>
                           </button>
@@ -1367,7 +1429,30 @@ export default function SchedulingPage() {
                                       const override = weeklyOverrides.find(
                                         (o: any) => String(o.employeeId) === String(employee.employeeId) && o.date === dateISO
                                       )
-                                      const status = override ? "Absent" : "Present"
+                                      const attRecord = dayAttendance.find(
+                                        (a: any) => String(a.employeeId) === String(employee.employeeId)
+                                      )
+
+                                      // Determine status from actual data
+                                      let status: string
+                                      let statusColor: string
+                                      if (override) {
+                                        status = "Absent"
+                                        statusColor = "text-amber-600"
+                                      } else if (attRecord && attRecord.timeIn) {
+                                        status = "Present"
+                                        statusColor = "text-green-600"
+                                      } else if (isPastDay) {
+                                        status = "Absent"
+                                        statusColor = "text-red-600"
+                                      } else if (isToday) {
+                                        status = "No Clock-in"
+                                        statusColor = "text-gray-500"
+                                      } else {
+                                        status = "Scheduled"
+                                        statusColor = "text-blue-600"
+                                      }
+
                                       const displayBranch = override ? override.overrideBranchName : branchAssignment.branchName
 
                                       return (
@@ -1377,7 +1462,7 @@ export default function SchedulingPage() {
                                             <div className="text-muted-foreground">{formatShift(employee.shift)} Shift</div>
                                           </div>
                                           <div className="text-right">
-                                            <div className={`font-medium ${override ? "text-amber-600" : "text-green-600"}`}>
+                                            <div className={`font-medium ${statusColor}`}>
                                               {status}
                                             </div>
                                             {displayBranch && <div className="text-muted-foreground text-xs">{displayBranch}</div>}

@@ -90,14 +90,45 @@ export async function PUT(req: Request) {
 }
 
 // DELETE /api/branches?id=xxx
+// Cascade: removes all employees assigned to this branch + their attendance records
 export async function DELETE(req: Request) {
   try {
     const url = new URL(req.url);
     const id = url.searchParams.get("id");
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
 
+    // 1. Find all employees assigned to this branch
+    const employees: any[] = await query(
+      "SELECT id FROM users WHERE branchId = ?",
+      [id]
+    );
+    const employeeIds = employees.map((e: any) => e.id);
+
+    // 2. Delete attendance records for those employees
+    if (employeeIds.length > 0) {
+      const placeholders = employeeIds.map(() => "?").join(",");
+      await execute(
+        `DELETE FROM daily_attendance WHERE employeeId IN (${placeholders})`,
+        employeeIds
+      );
+    }
+
+    // 3. Delete the employees themselves
+    if (employeeIds.length > 0) {
+      const placeholders = employeeIds.map(() => "?").join(",");
+      await execute(
+        `DELETE FROM users WHERE id IN (${placeholders})`,
+        employeeIds
+      );
+    }
+
+    // 4. Delete the branch
     await execute("DELETE FROM branches WHERE id = ?", [id]);
-    return NextResponse.json({ success: true });
+
+    return NextResponse.json({
+      success: true,
+      deletedEmployees: employeeIds.length,
+    });
   } catch (error: any) {
     console.error("DELETE /api/branches error:", error);
     return NextResponse.json({ message: "Server error" }, { status: 500 });
