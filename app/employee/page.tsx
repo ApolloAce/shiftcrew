@@ -144,7 +144,7 @@ export default function EmployeeDashboard() {
   const validateLocation = async (): Promise<boolean> => {
     if (!currentUser) return false
     setLocationStatus("checking")
-    setLocationMessage("Getting your location...")
+    setLocationMessage("Processing...")
 
     try {
       // 1. Get GPS position
@@ -161,7 +161,7 @@ export default function EmployeeDashboard() {
         console.warn("[Attendance] Spoof indicators:", warnings)
       }
 
-      setLocationMessage("Verifying your location against branch...")
+      setLocationMessage("Verifying attendance...")
 
       // 2. Validate against branch radius via API
       const res = await fetch("/api/attendance/validate-location", {
@@ -180,17 +180,17 @@ export default function EmployeeDashboard() {
 
       if (data.valid) {
         setLocationStatus("valid")
-        setLocationMessage(`Location verified! You are ${data.distanceMeters}m from ${data.branchName}.`)
+        setLocationMessage("Attendance verified successfully!")
         return true
       } else {
         setLocationStatus("rejected")
-        setLocationMessage(data.message || "You are not within the branch attendance zone.")
+        setLocationMessage("You are not within the allowed attendance zone. Please move closer to your assigned branch.")
         return false
       }
     } catch (error: any) {
       console.error("Location validation error:", error)
       setLocationStatus("error")
-      setLocationMessage(error.message || "Failed to get your location. Please enable location services and try again.")
+      setLocationMessage("Unable to verify attendance. Please ensure location services are enabled and try again.")
       return false
     }
   }
@@ -547,7 +547,7 @@ export default function EmployeeDashboard() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Clock In</DialogTitle>
-            <DialogDescription>Your location will be verified against your assigned branch</DialogDescription>
+            <DialogDescription>Confirm your attendance to start your shift</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {locationStatus === "idle" && (
@@ -557,12 +557,11 @@ export default function EmployeeDashboard() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">
-                    Press the button below to verify your location and clock in.
-                    You must be within your assigned branch's attendance zone.
+                    Press the button below to clock in and start your shift.
                   </p>
                 </div>
                 <Button onClick={submitClockIn} disabled={isLoading} className="w-full">
-                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying Location...</>) : (<><Navigation className="mr-2 h-4 w-4" />Verify Location & Clock In</>)}
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : (<><Navigation className="mr-2 h-4 w-4" />Clock In</>)}
                 </Button>
               </div>
             )}
@@ -579,11 +578,6 @@ export default function EmployeeDashboard() {
                 <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg text-center">
                   <CheckCircle className="h-10 w-10 text-green-600 mx-auto mb-2" />
                   <p className="text-sm font-medium text-green-800 dark:text-green-200">{locationMessage}</p>
-                  {currentLocation && (
-                    <p className="text-xs text-green-600 mt-1">
-                      Accuracy: ±{Math.round(currentLocation.accuracy)}m
-                    </p>
-                  )}
                 </div>
               </div>
             )}
@@ -595,7 +589,7 @@ export default function EmployeeDashboard() {
                   <p className="text-sm font-medium text-red-800 dark:text-red-200">{locationMessage}</p>
                 </div>
                 <Button variant="outline" onClick={submitClockIn} disabled={isLoading} className="w-full">
-                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry Location Check"}
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry"}
                 </Button>
               </div>
             )}
@@ -620,7 +614,7 @@ export default function EmployeeDashboard() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Clock Out</DialogTitle>
-            <DialogDescription>Your location will be verified against your assigned branch</DialogDescription>
+            <DialogDescription>Confirm your attendance to end your shift</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {locationStatus === "idle" && (
@@ -630,11 +624,11 @@ export default function EmployeeDashboard() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">
-                    Press the button below to verify your location and clock out.
+                    Press the button below to clock out and end your shift.
                   </p>
                 </div>
                 <Button onClick={submitClockOut} disabled={isLoading} variant="outline" className="w-full">
-                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying Location...</>) : (<><Navigation className="mr-2 h-4 w-4" />Verify Location & Clock Out</>)}
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>) : (<><Navigation className="mr-2 h-4 w-4" />Clock Out</>)}
                 </Button>
               </div>
             )}
@@ -662,7 +656,7 @@ export default function EmployeeDashboard() {
                   <p className="text-sm font-medium text-red-800 dark:text-red-200">{locationMessage}</p>
                 </div>
                 <Button variant="outline" onClick={submitClockOut} disabled={isLoading} className="w-full">
-                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry Location Check"}
+                  {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry"}
                 </Button>
               </div>
             )}
