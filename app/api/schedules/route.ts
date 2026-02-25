@@ -10,11 +10,16 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const date = url.searchParams.get("date");
     const weekStart = url.searchParams.get("weekStart");
+    const scheduleFor = url.searchParams.get("scheduleFor");
 
     let sql = "SELECT * FROM schedules";
     const params: any[] = [];
     const conditions: string[] = [];
 
+    if (scheduleFor) {
+      conditions.push("scheduleFor = ?");
+      params.push(scheduleFor);
+    }
     if (date) {
       conditions.push("date = ?");
       params.push(date);
@@ -195,6 +200,8 @@ function groupAssignmentsByBranch(assignments: any[]) {
       employeeName: a.employeeName,
       isPresent: a.isPresent,
       shift: a.shift,
+      shiftStart: a.shiftStart,
+      shiftEnd: a.shiftEnd,
     });
   }
   return Array.from(map.values());

@@ -18,6 +18,15 @@ import { saveManualOverride, getOverridesForWeek } from "@/lib/firestore-manual-
 import { updateEmployee } from "@/lib/firestore-employee-service"
 import { Search, RotateCcw, Edit, Calendar, Users, AlertTriangle, Clock } from "lucide-react"
 
+// Map shift type string to actual start/end times
+function getShiftTimes(shift: string): { shiftStart: string; shiftEnd: string } {
+  switch (shift?.toUpperCase()) {
+    case "PM": return { shiftStart: "14:00", shiftEnd: "22:00" }
+    case "AM":
+    default: return { shiftStart: "07:00", shiftEnd: "14:00" }
+  }
+}
+
 // Scheduling now uses live store data. No local sampleEmployees are present so the app starts empty.
 // Branches are loaded from the live crew store (managed in Branch Management). We derive a
 // lightweight `branchesList` from the store inside the component so the UI and rotation
@@ -479,7 +488,7 @@ export default function SchedulingPage() {
       const todayISO = formatDateLocal(new Date())
 
       // Build assignments for the regenerated rotation
-      const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+      const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
 
       for (const emp of next) {
         // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
@@ -511,12 +520,14 @@ export default function SchedulingPage() {
           const branchName = fireBranch ? (fireBranch.branchName || fireBranch.name) : (targetBranch.branchName || targetBranch.name)
           const employeeName = `${emp.firstName} ${emp.surname}`
 
+          const shiftType = emp.shift || "AM"
           regeneratedAssignments.push({
             employeeId,
             employeeName,
             branchId,
             branchName,
-            shift: emp.shift || "AM",
+            shift: shiftType,
+            ...getShiftTimes(shiftType),
           })
         }
       }
@@ -563,6 +574,8 @@ export default function SchedulingPage() {
                   branchName: a.branchName,
                   isPresent: true,
                   shift: a.shift,
+                  shiftStart: a.shiftStart,
+                  shiftEnd: a.shiftEnd,
                 })),
               })
               savedDates.push(dayISO)
@@ -757,7 +770,7 @@ export default function SchedulingPage() {
       console.log("[Manual Schedule] Saving schedule for date:", selectedDate)
 
       // Build complete assignments array (rotated + manual)
-      const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+      const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
 
       // Add rotated employees if any
       if (rotatedEmployees && rotatedEmployees.length > 0) {
@@ -777,12 +790,14 @@ export default function SchedulingPage() {
           const branchName = fireBranch ? (fireBranch.branchName || fireBranch.name) : emp.nextWeekBranch
           const employeeName = `${emp.firstName} ${emp.surname}`
 
+          const shiftType = emp.nextWeekShift || "AM"
           allAssignments.push({
             employeeId,
             employeeName,
             branchId,
             branchName,
-            shift: emp.nextWeekShift || "AM",
+            shift: shiftType,
+            ...getShiftTimes(shiftType),
           })
         }
       }
@@ -807,6 +822,7 @@ export default function SchedulingPage() {
               branchId: String(branch.id),
               branchName: branch.branchName || branch.name,
               shift: "AM",
+              ...getShiftTimes("AM"),
             })
           }
 
@@ -856,6 +872,8 @@ export default function SchedulingPage() {
               branchName: a.branchName,
               isPresent: true,
               shift: a.shift,
+              shiftStart: a.shiftStart,
+              shiftEnd: a.shiftEnd,
             })),
           })
 
@@ -908,14 +926,20 @@ export default function SchedulingPage() {
           const schedules = await getSchedulesForDateFromFirestore(thisMondayISO)
           if (!schedules || schedules.length === 0) {
             if (nextWeekRotationPreview && nextWeekRotationPreview.length > 0) {
-              const assignments = nextWeekRotationPreview.map((emp: any) => ({
-                employeeId: String(emp.id),
-                employeeName: `${emp.firstName} ${emp.surname}`,
-                branchId: branchesList.find((b) => b.name === emp.nextWeekBranch)?.id || "",
-                branchName: emp.nextWeekBranch,
-                isPresent: true,
-                shift: emp.nextWeekShift || "AM",
-              }))
+              const assignments = nextWeekRotationPreview.map((emp: any) => {
+                const shiftType = emp.nextWeekShift || "AM"
+                const { shiftStart, shiftEnd } = getShiftTimes(shiftType)
+                return {
+                  employeeId: String(emp.id),
+                  employeeName: `${emp.firstName} ${emp.surname}`,
+                  branchId: branchesList.find((b) => b.name === emp.nextWeekBranch)?.id || "",
+                  branchName: emp.nextWeekBranch,
+                  isPresent: true,
+                  shift: shiftType,
+                  shiftStart,
+                  shiftEnd,
+                }
+              })
               const weekStart = formatDateLocal(thisMonday)
               const weekEnd = formatDateLocal(thisSunday)
               for (let i = 0; i < 7; i++) {
@@ -1662,7 +1686,7 @@ export default function SchedulingPage() {
                     const currentSundayISO = (() => { const s = new Date(currentMonday); s.setDate(currentMonday.getDate() + 6); return formatDateLocal(s) })()
 
                     // Build assignments for current week's schedule
-                    const applyRotationAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string }> = []
+                    const applyRotationAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
 
                     for (const emp of rotatedEmployees) {
                       // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
@@ -1671,12 +1695,14 @@ export default function SchedulingPage() {
                       if (targetBranch) {
                         const employeeName = `${emp.firstName} ${emp.surname}`
                         const branchName = targetBranch.branchName || targetBranch.name
+                        const shiftType = emp.nextWeekShift || "AM"
                         applyRotationAssignments.push({
                           employeeId: String(emp.id),
                           employeeName,
                           branchId: String(targetBranch.id),
                           branchName,
-                          shift: emp.nextWeekShift || "AM",
+                          shift: shiftType,
+                          ...getShiftTimes(shiftType),
                         })
                         console.log("[Apply Rotation Button] Added assignment:", employeeName, "->", branchName)
 
@@ -1725,6 +1751,8 @@ export default function SchedulingPage() {
                                 branchName: a.branchName,
                                 isPresent: true,
                                 shift: a.shift,
+                                shiftStart: a.shiftStart,
+                                shiftEnd: a.shiftEnd,
                               })),
                             })
                             savedDates.push(dayISO)

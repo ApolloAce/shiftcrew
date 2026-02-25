@@ -61,6 +61,7 @@ export default function EmployeeDashboard() {
           ])
 
           setAssignedBranch(branchRes)
+          // If no direct branchId, we'll try to get branch from today's schedule later
           setPendingLeaves(Array.isArray(leaveRes) ? leaveRes : [])
 
           // Find today's attendance record
@@ -92,13 +93,31 @@ export default function EmployeeDashboard() {
                         )
                         if (emp) {
                           const shiftObj = typeof emp.shift === "object" && emp.shift ? emp.shift : null
+                          // Map shift string to actual times
+                          const shiftTimes = typeof emp.shift === "string" ? (() => {
+                            switch (emp.shift.toUpperCase()) {
+                              case "AM": return { start: "07:00", end: "14:00" }
+                              case "PM": return { start: "14:00", end: "22:00" }
+                              default: return { start: "", end: "" }
+                            }
+                          })() : null
                           setTodaySchedule({
                             date: sched.scheduleFor || sched.date,
-                            startTime: shiftObj?.start || sched.time || "",
-                            endTime: shiftObj?.end || "",
+                            startTime: shiftObj?.start || emp.shiftStart || shiftTimes?.start || sched.time || "",
+                            endTime: shiftObj?.end || emp.shiftEnd || shiftTimes?.end || "",
                             branchName: branch.branchName || "Unknown",
                             notes: sched.notes || "",
                           })
+                          // Also set assignedBranch from schedule if not set from direct branchId
+                          if (!userData.branchId && branch.branchId) {
+                            try {
+                              const brRes = await fetch(`/api/branches?id=${branch.branchId}`)
+                              if (brRes.ok) {
+                                const brData = await brRes.json()
+                                if (brData) setAssignedBranch(brData)
+                              }
+                            } catch {}
+                          }
                           found = true
                           break
                         }

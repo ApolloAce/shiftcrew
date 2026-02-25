@@ -16,6 +16,15 @@ interface EmployeeShift {
   notes?: string
 }
 
+// Map shift type string to actual start/end times
+function getShiftTimes(shift: string): { start: string; end: string } {
+  switch (shift?.toUpperCase()) {
+    case "AM": return { start: "07:00", end: "14:00" }
+    case "PM": return { start: "14:00", end: "22:00" }
+    default: return { start: "", end: "" }
+  }
+}
+
 export default function EmployeeSchedulePage() {
   const [currentUser, setCurrentUser] = useState<{ id: number | string } | null>(null)
   const [currentDate, setCurrentDate] = useState(new Date())
@@ -99,12 +108,14 @@ export default function EmployeeSchedulePage() {
                   (e: any) => String(e.employeeId) === String(currentUser.id)
                 )
                 if (found) {
-                  // shift can be a string ("AM") or object ({start, end})
+                  // shift can be a string ("AM"/"PM") or object ({start, end})
                   const shiftObj = typeof found.shift === "object" && found.shift ? found.shift : null
+                  // Map shift string to actual times
+                  const shiftTimes = typeof found.shift === "string" ? getShiftTimes(found.shift) : null
                   employeeShifts.push({
                     date: sched.scheduleFor || sched.date,
-                    startTime: shiftObj?.start || sched.time || "",
-                    endTime: shiftObj?.end || "",
+                    startTime: shiftObj?.start || found.shiftStart || shiftTimes?.start || sched.time || "",
+                    endTime: shiftObj?.end || found.shiftEnd || shiftTimes?.end || "",
                     branchName: branch.branchName || "Unknown Branch",
                     branchId: branch.branchId || "",
                     notes: sched.notes,
