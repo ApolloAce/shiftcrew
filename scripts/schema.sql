@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS branches (
   id          VARCHAR(64)  NOT NULL PRIMARY KEY DEFAULT (UUID()),
   branchName  VARCHAR(255) NOT NULL,
   address     TEXT         DEFAULT NULL,
+  latitude    DECIMAL(10,7) DEFAULT NULL,
+  longitude   DECIMAL(10,7) DEFAULT NULL,
+  city        VARCHAR(255)  DEFAULT NULL,
+  province    VARCHAR(255)  DEFAULT NULL,
+  radius      INT           NOT NULL DEFAULT 100,
   createdAt   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
@@ -71,9 +76,9 @@ CREATE TABLE IF NOT EXISTS daily_attendance (
   employeeName VARCHAR(200) DEFAULT NULL,
   date         VARCHAR(10)  NOT NULL,
   status       ENUM('present','absent') NOT NULL DEFAULT 'present',
-  timeIn       VARCHAR(8)   DEFAULT NULL,          -- HH:MM:SS
-  timeOut      VARCHAR(8)   DEFAULT NULL,          -- HH:MM:SS
-  photoUrl     LONGTEXT     DEFAULT NULL,          -- base64 selfie data URL
+  timeIn       VARCHAR(8)   DEFAULT NULL,
+  timeOut      VARCHAR(8)   DEFAULT NULL,
+  photoUrl     LONGTEXT     DEFAULT NULL,
   latitude     DECIMAL(10,7) DEFAULT NULL,
   longitude    DECIMAL(10,7) DEFAULT NULL,
   branchId     VARCHAR(64)  DEFAULT NULL,
@@ -121,21 +126,6 @@ CREATE TABLE IF NOT EXISTS absences (
 ) ENGINE=InnoDB;
 
 -- ============================================================
--- NOTIFICATIONS
--- ============================================================
-CREATE TABLE IF NOT EXISTS notifications (
-  id           VARCHAR(64)  NOT NULL PRIMARY KEY DEFAULT (UUID()),
-  recipientId  VARCHAR(64)  DEFAULT NULL,
-  title        VARCHAR(255) NOT NULL,
-  message      TEXT         NOT NULL,
-  type         VARCHAR(50)  DEFAULT 'info',
-  isRead       TINYINT(1)   NOT NULL DEFAULT 0,
-  createdAt    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_notifications_recipient (recipientId),
-  INDEX idx_notifications_read (isRead)
-) ENGINE=InnoDB;
-
--- ============================================================
 -- MANUAL OVERRIDES
 -- ============================================================
 CREATE TABLE IF NOT EXISTS manual_overrides (
@@ -155,4 +145,19 @@ CREATE TABLE IF NOT EXISTS manual_overrides (
   updatedAt          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_overrides_employee_date (employeeId, date),
   INDEX idx_overrides_date (date)
+) ENGINE=InnoDB;
+
+-- ============================================================
+-- NOTIFICATIONS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS notifications (
+  id           VARCHAR(64)  NOT NULL PRIMARY KEY DEFAULT (UUID()),
+  recipientId  VARCHAR(64)  DEFAULT NULL,
+  title        VARCHAR(255) NOT NULL,
+  message      TEXT         NOT NULL,
+  type         VARCHAR(50)  DEFAULT 'info',
+  isRead       TINYINT(1)   NOT NULL DEFAULT 0,
+  createdAt    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_notifications_recipient (recipientId),
+  INDEX idx_notifications_isRead (isRead)
 ) ENGINE=InnoDB;

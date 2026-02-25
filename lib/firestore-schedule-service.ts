@@ -72,16 +72,6 @@ export const updateScheduleAssignments = async (scheduleId: string, assignments:
   })
 }
 
-// Get all schedules for a specific week by weekStart (Monday ISO)
-export const getSchedulesForWeek = async (weekStart: string): Promise<Schedule[]> => {
-  return apiFetch(`${API}?weekStart=${weekStart}`)
-}
-
-// Get schedules for an exact scheduleFor date
-export const getSchedulesForScheduleFor = async (scheduleFor: string): Promise<Schedule[]> => {
-  return apiFetch(`${API}?scheduleFor=${scheduleFor}`)
-}
-
 // Delete all schedules for a given week
 export const deleteSchedulesForWeek = async (weekStart: string): Promise<void> => {
   await apiFetch(`${API}?weekStart=${weekStart}`, { method: "DELETE" })

@@ -22,7 +22,6 @@ import {
   type Employee,
 } from "@/lib/firestore-employee-service"
 import { getTodayAttendance } from "@/lib/firestore-attendance-service"
-import { getAllBranches } from "@/lib/firestore-branch-service"
 
 export default function EmployeesPage() {
   // Wrap the entire component in an error boundary
@@ -45,22 +44,19 @@ function EmployeesContent() {
   const [activeCrews, setActiveCrews] = useState<Employee[]>([])
   const [archivedCrews, setArchivedCrews] = useState<Employee[]>([])
   const [todayAttendance, setTodayAttendance] = useState<Record<string, boolean>>({})
-  const [branches, setBranches] = useState<any[]>([])
 
   // Fetch employees and today's attendance from MySQL
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
         setIsLoading(true)
-        const [active, archived, attendance, brs] = await Promise.all([
+        const [active, archived, attendance] = await Promise.all([
           getActiveEmployees(),
           getArchivedEmployees(),
           getTodayAttendance(),
-          getAllBranches(),
         ])
         setActiveCrews(active)
         setArchivedCrews(archived)
-        setBranches(brs)
 
         // Build a lookup: employeeId -> true/false based on daily_attendance
         const attendanceMap: Record<string, boolean> = {}
@@ -86,13 +82,6 @@ function EmployeesContent() {
   // Helper: check attendance from daily_attendance table (not users.isPresent)
   const isEmployeePresent = (employeeId: string) => {
     return todayAttendance[employeeId] === true
-  }
-
-  // Helper: resolve branchId to branch name
-  const getBranchName = (branchId: string | number | null | undefined): string => {
-    if (!branchId) return "Unassigned"
-    const branch = branches.find((b: any) => String(b.id) === String(branchId))
-    return branch ? branch.branchName : "Unassigned"
   }
 
   // Filter crews based on search query
@@ -403,17 +392,16 @@ function EmployeesContent() {
   const EmployeeList = ({ employees, isArchived = false }: { employees: Employee[]; isArchived?: boolean }) => (
     <div className="rounded-md border overflow-x-auto">
       <div className="min-w-[800px]">
-        <div className="grid grid-cols-5 p-4 font-medium bg-muted/50">
+        <div className="grid grid-cols-4 p-4 font-medium bg-muted/50">
           <div>Name</div>
           <div>Type</div>
           <div>Status</div>
-          <div>Branch</div>
           <div>Actions</div>
         </div>
 
         {employees.length > 0 ? (
           employees.map((employee) => (
-            <div key={employee.id} className="grid grid-cols-5 p-4 border-t items-center">
+            <div key={employee.id} className="grid grid-cols-4 p-4 border-t items-center">
               <div className="font-medium">
                 {employee.firstName} {employee.surname}
               </div>
@@ -423,7 +411,6 @@ function EmployeesContent() {
                   {isEmployeePresent(employee.id) ? "Present" : "Absent"}
                 </Badge>
               </div>
-              <div>{getBranchName(employee.branchId)}</div>
               <div className="flex gap-2">
                 {!isArchived ? (
                   <>

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query, execute } from "../../../lib/mysql";
+import { query, execute, mysqlNow } from "../../../lib/mysql";
 import bcrypt from "bcryptjs";
 
 export async function POST(req: Request) {
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     // Hash password before saving
     const passwordHash = await bcrypt.hash(formData.password, 10);
     const id = crypto.randomUUID();
-    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const now = mysqlNow();
 
     await execute(
       `INSERT INTO users (id, firstName, surname, nickname, email, passwordHash, phone, address, type, availability, isPresent, isEmployee, archived, status, role, hireDate, createdAt, updatedAt)
@@ -40,17 +40,6 @@ export async function POST(req: Request) {
         now,
       ]
     );
-
-    // Create a welcome notification for the new employee
-    try {
-      const notifId = crypto.randomUUID();
-      await execute(
-        `INSERT INTO notifications (id, recipientId, title, message, type, isRead, createdAt) VALUES (?, ?, ?, ?, ?, 0, ?)`,
-        [notifId, id, "Welcome to ShiftCrew", `Your account has been created successfully. Welcome, ${formData.firstName}!`, "success", now]
-      );
-    } catch (notifErr) {
-      console.warn("Failed to create welcome notification:", notifErr);
-    }
 
     return NextResponse.json({
       id,

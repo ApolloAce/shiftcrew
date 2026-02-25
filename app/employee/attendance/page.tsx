@@ -6,11 +6,12 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, parseISO } from "date-fns"
-import { Calendar, Clock, AlertCircle, MapPin, Camera, CheckCircle, XCircle, Loader2 } from "lucide-react"
+import { Calendar, Clock, AlertCircle, MapPin, Navigation, CheckCircle, XCircle, Loader2 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { getCurrentPosition, checkSpoofIndicators } from "@/lib/geolocation-helper"
 
 export default function EmployeeAttendancePage() {
   const { showNotification } = useNotification()
@@ -29,10 +30,10 @@ export default function EmployeeAttendancePage() {
 
   const [showClockInModal, setShowClockInModal] = useState(false)
   const [showClockOutModal, setShowClockOutModal] = useState(false)
-  const [locationStatus, setLocationStatus] = useState<"checking" | "valid" | "invalid" | "error">("checking")
-  const [cameraStatus, setCameraStatus] = useState<"waiting" | "active" | "captured" | "error">("waiting")
-  const [currentLocation, setCurrentLocation] = useState<any | null>(null)
-  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null)
+  const [locationStatus, setLocationStatus] = useState<"idle" | "checking" | "valid" | "rejected" | "error">("idle")
+  const [locationMessage, setLocationMessage] = useState("")
+  const [locationDistance, setLocationDistance] = useState<number | null>(null)
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number; accuracy: number } | null>(null)
   const [branchInfo, setBranchInfo] = useState<any | null>(null)
 
   useEffect(() => {
@@ -80,146 +81,84 @@ export default function EmployeeAttendancePage() {
     }
   }
 
-  const capturePhoto = async (): Promise<boolean> => {
-    setCameraStatus("active")
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showNotification("error", "Camera Unavailable", "Camera access is not available. Ensure you are using HTTPS and a supported browser.")
-      setCameraStatus("error")
-      return false
-    }
-
-    try {
-      let stream: MediaStream
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-          audio: false,
-        })
-      } catch (constraintError: any) {
-        if (constraintError.name === "OverconstrainedError" || constraintError.name === "ConstraintNotSatisfiedError") {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        } else {
-          throw constraintError
-        }
-      }
-
-      const video = document.createElement("video")
-      video.setAttribute("autoplay", "")
-      video.setAttribute("playsinline", "")
-      video.setAttribute("muted", "")
-      video.muted = true
-      video.srcObject = stream
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Camera timed out")), 10000)
-        video.onloadeddata = () => { clearTimeout(timeout); resolve() }
-        video.onerror = () => { clearTimeout(timeout); reject(new Error("Video element error")) }
-      })
-
-      await video.play()
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      if (!video.videoWidth || !video.videoHeight) {
-        stream.getTracks().forEach((track) => track.stop())
-        showNotification("error", "Camera Error", "Camera started but produced no video frames. Please try again.")
-        setCameraStatus("error")
-        return false
-      }
-
-      const canvas = document.createElement("canvas")
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      const ctx = canvas.getContext("2d")
-      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-      const photoDataUrl = canvas.toDataURL("image/jpeg", 0.8)
-      setCapturedPhoto(photoDataUrl)
-      setCameraStatus("captured")
-      stream.getTracks().forEach((track) => track.stop())
-      return true
-    } catch (error: any) {
-      console.error("Camera error:", error.name, error.message)
-      setCameraStatus("error")
-
-      let title = "Camera Error"
-      let message = "Unable to access camera. Please check your permissions."
-      if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
-        title = "Camera Permission Denied"
-        message = "Camera access was denied. Please allow camera permissions in your browser settings."
-      } else if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-        title = "No Camera Found"
-        message = "No camera was detected on this device."
-      } else if (error.name === "NotReadableError" || error.name === "TrackStartError") {
-        title = "Camera In Use"
-        message = "The camera is already in use by another application."
-      } else if (error.message === "Camera timed out") {
-        title = "Camera Timeout"
-        message = "Camera took too long to start. Please check your camera connection."
-      }
-      showNotification("error", title, message)
-      return false
-    }
-  }
-
   const handleClockInAttempt = () => {
     setShowClockInModal(true)
-    setLocationStatus("checking")
-    setCameraStatus("waiting")
-    setCapturedPhoto(null)
+    setLocationStatus("idle")
+    setLocationMessage("")
+    setLocationDistance(null)
     setCurrentLocation(null)
   }
 
   const handleClockOutAttempt = () => {
     setShowClockOutModal(true)
-    setLocationStatus("checking")
-    setCameraStatus("waiting")
-    setCapturedPhoto(null)
+    setLocationStatus("idle")
+    setLocationMessage("")
+    setLocationDistance(null)
     setCurrentLocation(null)
   }
 
-  const handlePhotoSubmit = async () => {
-    if (!capturedPhoto) return
-
+  // Location validation (replaces photo + GPS flow)
+  const validateLocation = async (): Promise<boolean> => {
+    if (!currentUser) return false
     setLocationStatus("checking")
+    setLocationMessage("Getting your location...")
 
     try {
-      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error("Geolocation is not supported by this browser"))
-          return
-        }
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 0,
-        })
-      })
-
+      const geoResult = await getCurrentPosition()
       setCurrentLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        accuracy: position.coords.accuracy,
+        latitude: geoResult.latitude,
+        longitude: geoResult.longitude,
+        accuracy: geoResult.accuracy,
       })
 
-      // For now, accept any location since branch coordinates aren't configured per-branch in DB
-      setLocationStatus("valid")
-      return true
-    } catch (error) {
-      console.error("GPS validation error:", error)
-      setLocationStatus("error")
-      if (error instanceof Error) {
-        showNotification("error", "Location Error", error.message)
+      const warnings = checkSpoofIndicators(geoResult)
+      if (warnings.length > 0) {
+        console.warn("[Attendance] Spoof indicators:", warnings)
       }
+
+      setLocationMessage("Verifying your location against branch...")
+
+      const res = await fetch("/api/attendance/validate-location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          latitude: geoResult.latitude,
+          longitude: geoResult.longitude,
+          accuracy: geoResult.accuracy,
+        }),
+      })
+
+      const data = await res.json()
+      setLocationDistance(data.distanceMeters ?? null)
+
+      if (data.valid) {
+        setLocationStatus("valid")
+        setLocationMessage(`Location verified! You are ${data.distanceMeters}m from ${data.branchName}.`)
+        return true
+      } else {
+        setLocationStatus("rejected")
+        setLocationMessage(data.message || "You are not within the branch attendance zone.")
+        return false
+      }
+    } catch (error: any) {
+      console.error("Location validation error:", error)
+      setLocationStatus("error")
+      setLocationMessage(error.message || "Failed to get your location. Please enable location services and try again.")
       return false
     }
   }
 
   const submitClockIn = async () => {
-    if (!currentUser || !capturedPhoto) return
-
+    if (!currentUser) return
     setIsLoading(true)
     try {
+      const isValid = await validateLocation()
+      if (!isValid) {
+        setIsLoading(false)
+        return
+      }
+
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeIn = now.toTimeString().slice(0, 8)
@@ -234,7 +173,6 @@ export default function EmployeeAttendancePage() {
           date: today,
           status: "present",
           timeIn,
-          photoUrl: capturedPhoto,
           latitude: currentLocation?.latitude || null,
           longitude: currentLocation?.longitude || null,
           branchId: currentUser.branchId || null,
@@ -266,10 +204,15 @@ export default function EmployeeAttendancePage() {
   }
 
   const submitClockOut = async () => {
-    if (!currentUser || !capturedPhoto) return
-
+    if (!currentUser) return
     setIsLoading(true)
     try {
+      const isValid = await validateLocation()
+      if (!isValid) {
+        setIsLoading(false)
+        return
+      }
+
       const now = new Date()
       const today = now.toISOString().split("T")[0]
       const timeOut = now.toTimeString().slice(0, 8)
@@ -346,7 +289,7 @@ export default function EmployeeAttendancePage() {
     })
   }
 
-  const VerificationModal = ({ isClockIn, show, onClose, onSubmit }: {
+  const LocationModal = ({ isClockIn, show, onClose, onSubmit }: {
     isClockIn: boolean
     show: boolean
     onClose: (open: boolean) => void
@@ -355,107 +298,68 @@ export default function EmployeeAttendancePage() {
     <Dialog open={show} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{isClockIn ? "Clock In" : "Clock Out"} Verification</DialogTitle>
-          <DialogDescription>Take a photo first, then we'll verify your location</DialogDescription>
+          <DialogTitle>{isClockIn ? "Clock In" : "Clock Out"}</DialogTitle>
+          <DialogDescription>Your location will be verified against your assigned branch</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium">1. Take Photo</h4>
-              {cameraStatus === "waiting" && <Clock className="h-4 w-4 text-gray-400" />}
-              {cameraStatus === "active" && <Loader2 className="h-4 w-4 animate-spin" />}
-              {cameraStatus === "captured" && <CheckCircle className="h-4 w-4 text-green-600" />}
-              {cameraStatus === "error" && <XCircle className="h-4 w-4 text-red-600" />}
-            </div>
-
-            {cameraStatus === "waiting" && (
-              <Button onClick={capturePhoto} className="w-full">
-                <Camera className="mr-2 h-4 w-4" />
-                Take Selfie
+        <div className="space-y-4">
+          {locationStatus === "idle" && (
+            <div className="text-center space-y-4 py-4">
+              <div className="mx-auto w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                <Navigation className="h-8 w-8 text-primary" />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Press the button below to verify your location and {isClockIn ? "clock in" : "clock out"}.
+                You must be within your assigned branch's attendance zone.
+              </p>
+              <Button onClick={onSubmit} disabled={isLoading} className="w-full">
+                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying Location...</>) : (<><Navigation className="mr-2 h-4 w-4" />Verify Location & {isClockIn ? "Clock In" : "Clock Out"}</>)}
               </Button>
-            )}
-
-            {cameraStatus === "active" && <p className="text-sm text-muted-foreground">Accessing camera...</p>}
-
-            {cameraStatus === "captured" && capturedPhoto && (
-              <div className="space-y-2">
-                <p className="text-sm text-green-600">✓ Photo captured successfully</p>
-                <img
-                  src={capturedPhoto}
-                  alt="Captured selfie"
-                  className="w-32 h-32 object-cover rounded-md mx-auto"
-                />
-                <Button variant="outline" size="sm" onClick={capturePhoto} className="w-full bg-transparent">
-                  Retake Photo
-                </Button>
-              </div>
-            )}
-
-            {cameraStatus === "error" && (
-              <div className="p-3 bg-red-50 dark:bg-red-950/20 rounded-md">
-                <p className="text-sm text-red-800 dark:text-red-200">
-                  ✗ Unable to access camera. Please allow camera permissions and try again.
-                </p>
-                <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={capturePhoto}>
-                  Retry Camera Access
-                </Button>
-              </div>
-            )}
-          </div>
-
-          {cameraStatus === "captured" && locationStatus === "checking" && (
-            <Button onClick={handlePhotoSubmit} className="w-full">
-              Submit Photo
-            </Button>
-          )}
-
-          {cameraStatus === "captured" && locationStatus !== "checking" && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-medium">2. Location Verification</h4>
-                {locationStatus === "valid" && <CheckCircle className="h-4 w-4 text-green-600" />}
-                {locationStatus === "invalid" && <XCircle className="h-4 w-4 text-red-600" />}
-                {locationStatus === "error" && <AlertCircle className="h-4 w-4 text-amber-600" />}
-              </div>
-
-              {locationStatus === "valid" && (
-                <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded-md">
-                  <p className="text-sm text-green-800 dark:text-green-200">
-                    ✓ GPS location verified
-                  </p>
-                </div>
-              )}
-
-              {locationStatus === "error" && (
-                <div className="p-3 bg-amber-50 dark:bg-amber-950/20 rounded-md">
-                  <p className="text-sm text-amber-800 dark:text-amber-200">
-                    ⚠ Location access required. Please enable location permissions.
-                  </p>
-                  <Button variant="outline" size="sm" className="mt-2 bg-transparent" onClick={handlePhotoSubmit}>
-                    Retry Location Check
-                  </Button>
-                </div>
-              )}
             </div>
           )}
 
-          <div className="pt-4 border-t">
-            <Button
-              onClick={onSubmit}
-              disabled={locationStatus !== "valid" || cameraStatus !== "captured" || isLoading}
-              className="w-full"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                isClockIn ? "Clock In" : "Clock Out"
-              )}
-            </Button>
-          </div>
+          {locationStatus === "checking" && (
+            <div className="text-center space-y-3 py-4">
+              <Loader2 className="h-10 w-10 animate-spin mx-auto text-primary" />
+              <p className="text-sm text-muted-foreground">{locationMessage}</p>
+            </div>
+          )}
+
+          {locationStatus === "valid" && (
+            <div className="space-y-3 py-2">
+              <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg text-center">
+                <CheckCircle className="h-10 w-10 text-green-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-green-800 dark:text-green-200">{locationMessage}</p>
+                {currentLocation && (
+                  <p className="text-xs text-green-600 mt-1">Accuracy: ±{Math.round(currentLocation.accuracy)}m</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {locationStatus === "rejected" && (
+            <div className="space-y-3 py-2">
+              <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-lg text-center">
+                <XCircle className="h-10 w-10 text-red-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-red-800 dark:text-red-200">{locationMessage}</p>
+              </div>
+              <Button variant="outline" onClick={onSubmit} disabled={isLoading} className="w-full">
+                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry Location Check"}
+              </Button>
+            </div>
+          )}
+
+          {locationStatus === "error" && (
+            <div className="space-y-3 py-2">
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg text-center">
+                <AlertCircle className="h-10 w-10 text-amber-600 mx-auto mb-2" />
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">{locationMessage}</p>
+              </div>
+              <Button variant="outline" onClick={onSubmit} disabled={isLoading} className="w-full">
+                {isLoading ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Retrying...</>) : "Retry"}
+              </Button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -465,7 +369,7 @@ export default function EmployeeAttendancePage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Attendance</h1>
-        <p className="text-muted-foreground">Manage your attendance with GPS and photo verification</p>
+        <p className="text-muted-foreground">Manage your attendance with location-based verification</p>
       </div>
 
       <Tabs defaultValue="clock" value={activeTab} onValueChange={setActiveTab}>
@@ -480,7 +384,7 @@ export default function EmployeeAttendancePage() {
             <CardHeader>
               <CardTitle className="flex items-center">
                 <Clock className="mr-2 h-5 w-5 text-primary" />
-                Time Clock with Verification
+                Time Clock
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -488,10 +392,10 @@ export default function EmployeeAttendancePage() {
                 <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-md border border-blue-200 dark:border-blue-800">
                   <h4 className="font-medium mb-2 flex items-center text-blue-800 dark:text-blue-200">
                     <MapPin className="mr-2 h-5 w-5 text-blue-600" />
-                    Location Requirement
+                    Location-Based Attendance
                   </h4>
                   <p className="text-sm text-blue-700 dark:text-blue-300">
-                    Please ensure your phone's location services are enabled before clocking in or out.
+                    Your location will be verified against your assigned branch. Please ensure location services are enabled.
                   </p>
                 </div>
 
@@ -543,7 +447,7 @@ export default function EmployeeAttendancePage() {
                     onClick={handleClockInAttempt}
                     disabled={isLoading || (latestTimeRecord && latestTimeRecord.status === "present" && !!latestTimeRecord.timeIn)}
                   >
-                    <Camera className="mr-2 h-4 w-4" />
+                    <Navigation className="mr-2 h-4 w-4" />
                     Clock In
                   </Button>
 
@@ -554,7 +458,7 @@ export default function EmployeeAttendancePage() {
                     onClick={handleClockOutAttempt}
                     disabled={isLoading || !latestTimeRecord || latestTimeRecord.status !== "present" || !!latestTimeRecord.timeOut}
                   >
-                    <Camera className="mr-2 h-4 w-4" />
+                    <Navigation className="mr-2 h-4 w-4" />
                     Clock Out
                   </Button>
                 </div>
@@ -566,8 +470,8 @@ export default function EmployeeAttendancePage() {
                   </h4>
                   <ul className="text-sm space-y-1 text-muted-foreground">
                     <li>• Enable your phone's location services before clocking in/out</li>
-                    <li>• GPS location will be recorded with your attendance</li>
-                    <li>• Selfie photo required for identity verification</li>
+                    <li>• GPS location will be verified against your assigned branch</li>
+                    <li>• You must be within the branch attendance radius to clock in/out</li>
                   </ul>
                 </div>
               </div>
@@ -680,13 +584,13 @@ export default function EmployeeAttendancePage() {
         </TabsContent>
       </Tabs>
 
-      <VerificationModal
+      <LocationModal
         isClockIn={true}
         show={showClockInModal}
         onClose={setShowClockInModal}
         onSubmit={submitClockIn}
       />
-      <VerificationModal
+      <LocationModal
         isClockIn={false}
         show={showClockOutModal}
         onClose={setShowClockOutModal}

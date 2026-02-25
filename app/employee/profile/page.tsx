@@ -64,11 +64,46 @@ export default function EmployeeProfilePage() {
           password: "",
           confirmPassword: "",
         })
+      } else {
+        // Employee not found via API — use session data as fallback
+        setEmployeeData({
+          id: userData.id,
+          firstName: userData.firstName || "",
+          surname: userData.surname || "",
+          email: userData.email || "",
+          phone: "",
+          address: "",
+          emergencyContact: "",
+          type: userData.type || "full-time",
+          position: "",
+          hireDate: "",
+        })
+        setProfileForm({
+          phone: "",
+          email: userData.email || "",
+          address: "",
+          emergencyContact: "",
+          password: "",
+          confirmPassword: "",
+        })
       }
 
       setAssignedBranch(branchRes)
     } catch (error) {
       console.error("Error fetching profile data:", error)
+      // Fallback to session data on error
+      setEmployeeData({
+        id: userData.id,
+        firstName: userData.firstName || "",
+        surname: userData.surname || "",
+        email: userData.email || "",
+        phone: "",
+        address: "",
+        emergencyContact: "",
+        type: userData.type || "full-time",
+        position: "",
+        hireDate: "",
+      })
     }
   }
 

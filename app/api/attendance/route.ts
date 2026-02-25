@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query, execute } from "@/lib/mysql";
+import { query, execute, mysqlNow } from "@/lib/mysql";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -43,56 +43,51 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/attendance — clock-in or clock-out
-// Body: { employeeId, employeeName, date, status, action?: "clock-in"|"clock-out",
-//         branchId?, branchName?, photoUrl?, latitude?, longitude?, timeIn?, timeOut? }
+// POST /api/attendance — save or update attendance record
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const docId = `${body.employeeId}_${body.date}`;
-    const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-    const action = body.action || "clock-in";
+    const now = mysqlNow();
 
-    if (action === "clock-out") {
-      // Clock-out: update existing record with timeOut
-      const timeOut = body.timeOut || new Date().toTimeString().slice(0, 8);
-      const existing: any[] = await query("SELECT id, timeIn FROM daily_attendance WHERE id = ?", [docId]);
-      if (!existing || existing.length === 0) {
-        return NextResponse.json({ message: "No clock-in record found for today. Please clock in first." }, { status: 400 });
+    // Check if this is a clock-in and a record already exists (duplicate prevention)
+    if (body.action === "clock-in") {
+      const existing = await query(
+        "SELECT id, timeIn FROM daily_attendance WHERE id = ? LIMIT 1",
+        [docId]
+      );
+      if (existing.length > 0 && existing[0].timeIn) {
+        return NextResponse.json({
+          id: docId,
+          alreadyClockedIn: true,
+          timeIn: existing[0].timeIn,
+        }, { status: 200 });
       }
+    }
+
+    // For clock-out, update only timeOut
+    if (body.action === "clock-out") {
       await execute(
         `UPDATE daily_attendance SET timeOut = ?, updatedAt = ? WHERE id = ?`,
-        [timeOut, now, docId]
+        [body.timeOut || null, now, docId]
       );
-      return NextResponse.json({ id: docId, timeOut }, { status: 200 });
+      return NextResponse.json({ id: docId, timeOut: body.timeOut }, { status: 200 });
     }
 
-    // Clock-in: check if already clocked in today
-    const existing: any[] = await query("SELECT id, timeIn FROM daily_attendance WHERE id = ?", [docId]);
-    if (existing && existing.length > 0 && existing[0].timeIn) {
-      // Already clocked in — return the existing record instead of blocking
-      return NextResponse.json({
-        id: docId,
-        alreadyClockedIn: true,
-        timeIn: existing[0].timeIn,
-        message: "You have already clocked in today."
-      }, { status: 200 });
-    }
-
-    const timeIn = body.timeIn || new Date().toTimeString().slice(0, 8);
-
+    // Clock-in or general attendance save
     await execute(
-      `INSERT INTO daily_attendance (id, employeeId, employeeName, date, status, timeIn, photoUrl, latitude, longitude, branchId, branchName, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO daily_attendance (id, employeeId, employeeName, date, status, timeIn, timeOut, photoUrl, latitude, longitude, branchId, branchName, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          employeeName = VALUES(employeeName),
          status = VALUES(status),
-         timeIn = VALUES(timeIn),
-         photoUrl = VALUES(photoUrl),
-         latitude = VALUES(latitude),
-         longitude = VALUES(longitude),
-         branchId = VALUES(branchId),
-         branchName = VALUES(branchName),
+         timeIn = COALESCE(daily_attendance.timeIn, VALUES(timeIn)),
+         timeOut = COALESCE(VALUES(timeOut), daily_attendance.timeOut),
+         photoUrl = COALESCE(VALUES(photoUrl), daily_attendance.photoUrl),
+         latitude = COALESCE(VALUES(latitude), daily_attendance.latitude),
+         longitude = COALESCE(VALUES(longitude), daily_attendance.longitude),
+         branchId = COALESCE(VALUES(branchId), daily_attendance.branchId),
+         branchName = COALESCE(VALUES(branchName), daily_attendance.branchName),
          updatedAt = VALUES(updatedAt)`,
       [
         docId,
@@ -100,7 +95,8 @@ export async function POST(req: Request) {
         body.employeeName || null,
         body.date,
         body.status || "present",
-        timeIn,
+        body.timeIn || null,
+        body.timeOut || null,
         body.photoUrl || null,
         body.latitude || null,
         body.longitude || null,
@@ -111,7 +107,7 @@ export async function POST(req: Request) {
       ]
     );
 
-    return NextResponse.json({ id: docId, timeIn }, { status: 201 });
+    return NextResponse.json({ id: docId, timeIn: body.timeIn }, { status: 201 });
   } catch (error: any) {
     console.error("POST /api/attendance error:", error);
     return NextResponse.json({ message: "Server error" }, { status: 500 });

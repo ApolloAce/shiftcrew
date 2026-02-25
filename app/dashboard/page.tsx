@@ -9,13 +9,13 @@ import { Search, Users } from "lucide-react"
 import { useNotification } from "@/components/notification-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
-import { getTodayAttendance, AttendanceRecord, saveAttendanceRecord } from "@/lib/firestore-attendance-service"
+import { saveAttendanceRecord } from "@/lib/firestore-attendance-service"
 import { getSchedulesForDate, Schedule } from "@/lib/firestore-schedule-service"
 import { updateScheduleAssignments } from "@/lib/firestore-schedule-service"
 
-// Helper: pick only the schedule for today (no fallback) — kept for backward compat
-function pickTodaySchedule(schedules: any[], todayISO: string) {
-  return schedules.find((s: any) => s.scheduleFor === todayISO) || schedules.find((s: any) => s.date === todayISO) || null;
+// Helper: pick only the schedule for today (no fallback)
+function pickTodaySchedule(schedules: Schedule[], todayISO: string) {
+  return schedules.find((s: Schedule) => s.scheduleFor === todayISO) || schedules.find((s: Schedule) => s.date === todayISO) || null;
 }
 
 function getMonday(date: Date) {
@@ -32,8 +32,6 @@ export default function DashboardPage() {
   const [employees, setEmployees] = useState<any[]>([])
   const [branches, setBranches] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [attendance, setAttendance] = useState<Record<string, boolean>>({})
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([])
   const [searchQuery, setSearchQuery] = useState("")
 
   const [scheduleData, setScheduleData] = useState<Schedule | null>(null)
@@ -49,30 +47,26 @@ export default function DashboardPage() {
         ])
         setEmployees(emps)
         setBranches(brs)
-        // Fetch only today's schedule using scheduleFor (exact match)
+        // Find the current week's Monday and Sunday
         const today = new Date()
         const todayISO = today.toISOString().split("T")[0]
-        try {
-          const res = await fetch(`/api/schedules?scheduleFor=${todayISO}`)
-          if (res.ok) {
-            const schedules = await res.json()
-            console.log('[DEBUG] Schedules fetched for today', todayISO, schedules)
-            if (Array.isArray(schedules) && schedules.length > 0) {
-              // Pick the most recently updated schedule for today
-              const todaySchedule = schedules.sort((a: any, b: any) => {
-                const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-                const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-                return dateB - dateA
-              })[0]
-              setScheduleData(todaySchedule)
-            } else {
-              setScheduleData(null)
-            }
-          } else {
-            setScheduleData(null)
-          }
-        } catch (schedErr) {
-          console.error("Dashboard: Error fetching today's schedule:", schedErr)
+        const monday = getMonday(today)
+        const weekDates: string[] = []
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(monday)
+          d.setDate(monday.getDate() + i)
+          weekDates.push(d.toISOString().split("T")[0])
+        }
+        // Fetch all schedules for the week in parallel
+        const weekScheduleResults = await Promise.all(
+          weekDates.map(dateISO => getSchedulesForDate(dateISO))
+        )
+        const allSchedules = weekScheduleResults.flat()
+        // Only show today's schedule, never fallback to previous days
+        const todaySchedule = pickTodaySchedule(allSchedules, todayISO)
+        if (todaySchedule) {
+          setScheduleData(todaySchedule)
+        } else {
           setScheduleData(null)
         }
       } catch (error) {
@@ -84,9 +78,6 @@ export default function DashboardPage() {
     }
     fetchData()
   }, [showNotification])
-
-  // Use employees from Firestore
-  const crews = employees
 
   // Calculate attendance statistics based on scheduleData (deduplicated)
   let allScheduledEmployees: { employeeId: string, employeeName?: string, isPresent: boolean, branchName?: string }[] = [];
@@ -127,59 +118,7 @@ export default function DashboardPage() {
   const totalCount = uniqueScheduledEmployees.length;
   const attendancePercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
 
-  // Debug: Show all scheduled employees for troubleshooting
-  console.log("[DEBUG] All scheduled employees:", uniqueScheduledEmployees)
 
-  // Debug: Log scheduleData and scheduledCrewsByBranch after every update
-  useEffect(() => {
-    console.log('[DEBUG] scheduleData:', scheduleData);
-    if (scheduleData && scheduleData.branchAssignments) {
-      const scheduledCrewsByBranch: Record<string, any[]> = {};
-      for (const branch of scheduleData.branchAssignments) {
-        scheduledCrewsByBranch[branch.branchName] = branch.employees.map(emp => ({
-          ...emp,
-          branchName: branch.branchName
-        }));
-      }
-      console.log('[DEBUG] scheduledCrewsByBranch:', scheduledCrewsByBranch);
-    }
-  }, [scheduleData]);
-
-  const handleToggleAttendance = async (crewId: string | number) => {
-    const key = String(crewId)
-    const newStatus = !attendance[key]
-    setAttendance((prev) => ({ ...prev, [key]: newStatus }))
-
-    // Find crew details for notification
-    const crew = crews.find((c) => String(c.id) === key)
-    const todayISO = new Date().toISOString().split("T")[0]
-
-    // Persist attendance to MySQL
-    try {
-      await saveAttendanceRecord({
-        employeeId: key,
-        employeeName: crew ? `${crew.firstName} ${crew.surname}` : "Unknown",
-        date: todayISO,
-        status: newStatus ? "present" : "absent",
-      })
-    } catch (err) {
-      console.error("Failed to save attendance:", err)
-    }
-
-    if (crew) {
-      showNotification(
-        newStatus ? "success" : "info",
-        `Marked ${newStatus ? "Present" : "Absent"}`,
-        `${crew.firstName} ${crew.surname} has been marked as ${newStatus ? "present" : "absent"}.`,
-      )
-    } else {
-      showNotification(
-        newStatus ? "success" : "info",
-        `Marked ${newStatus ? "Present" : "Absent"}`,
-        `Employee has been marked as ${newStatus ? "present" : "absent"}.`,
-      )
-    }
-  }
 
   // Fix: Use await updateScheduleAssignments and then force a state update by fetching only the updated schedule document by id
   const handleToggleScheduledAttendance = async (employeeId: string, branchName: string) => {
@@ -213,7 +152,7 @@ export default function DashboardPage() {
       }))
     );
     try {
-      await updateScheduleAssignments(scheduleData.id || '', updatedAssignments);
+      await updateScheduleAssignments(scheduleData.id!, updatedAssignments);
 
       // Also persist to daily_attendance table
       const todayISO = new Date().toISOString().split("T")[0]
@@ -227,7 +166,7 @@ export default function DashboardPage() {
       })
 
       // Fetch the updated schedule to ensure we get the latest state
-      const schedules = await getSchedulesForDate(scheduleData.date || '');
+      const schedules = await getSchedulesForDate(scheduleData.date);
       const updated = schedules.find((s: any) => s.id === scheduleData.id);
       if (updated) {
         setScheduleData(updated);
@@ -239,27 +178,25 @@ export default function DashboardPage() {
     }
   }
 
-  // Get all employees that match the search query
-  const filteredCrews = crews.filter((crew) => {
-    const fullName = `${crew.firstName} ${crew.surname}`.toLowerCase()
-    return fullName.includes(searchQuery.toLowerCase())
-  })
-
-  // Group scheduled employees by branch from the selected schedule, not from employee.branchId
+  // Group scheduled employees by branch, filtered by search query
   const getScheduledCrewsByBranch = () => {
     const result: Record<string, typeof uniqueScheduledEmployees> = {}
     if (scheduleData && scheduleData.branchAssignments) {
+      const query = searchQuery.toLowerCase()
       for (const branch of scheduleData.branchAssignments) {
-        result[branch.branchName] = branch.employees.map(emp => ({
-          ...emp,
-          branchName: branch.branchName
-        }))
+        const filtered = branch.employees
+          .map(emp => ({ ...emp, branchName: branch.branchName }))
+          .filter(emp => !query || (emp.employeeName || "").toLowerCase().includes(query))
+        if (filtered.length > 0) {
+          result[branch.branchName] = filtered
+        }
       }
     }
     return result
   }
 
   const scheduledCrewsByBranch = getScheduledCrewsByBranch()
+  const hasFilteredResults = Object.values(scheduledCrewsByBranch).some(crews => crews.length > 0)
 
   return (
     <div className="space-y-8">
@@ -375,7 +312,7 @@ export default function DashboardPage() {
                     ),
                 )}
 
-                {filteredCrews.length === 0 && searchQuery && (
+                {!hasFilteredResults && searchQuery && (
                   <div className="text-center py-8 text-muted-foreground">
                     No employees found matching "{searchQuery}"
                   </div>

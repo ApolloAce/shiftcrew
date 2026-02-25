@@ -52,7 +52,53 @@ export async function POST(req: Request) {
 
     const employee = employees[0];
 
-    if (!employee.branchId) {
+    let assignedBranchId = employee.branchId;
+
+    // If the employee has no static branchId, check today's schedule for their assignment
+    if (!assignedBranchId) {
+      const todayISO = new Date().toISOString().split("T")[0];
+      const schedules: any[] = await query(
+        "SELECT branchAssignments, assignments FROM schedules WHERE scheduleFor = ? OR date = ? ORDER BY updatedAt DESC",
+        [todayISO, todayISO]
+      );
+
+      for (const sched of schedules) {
+        // Check branchAssignments (structured format)
+        let branchAssignments = sched.branchAssignments;
+        if (typeof branchAssignments === "string") {
+          try { branchAssignments = JSON.parse(branchAssignments); } catch { branchAssignments = null; }
+        }
+        if (Array.isArray(branchAssignments)) {
+          for (const branch of branchAssignments) {
+            const found = branch.employees?.find(
+              (e: any) => String(e.employeeId) === String(employeeId)
+            );
+            if (found && branch.branchId) {
+              assignedBranchId = branch.branchId;
+              break;
+            }
+          }
+        }
+        if (assignedBranchId) break;
+
+        // Check flat assignments array (legacy format)
+        let assignments = sched.assignments;
+        if (typeof assignments === "string") {
+          try { assignments = JSON.parse(assignments); } catch { assignments = null; }
+        }
+        if (Array.isArray(assignments)) {
+          const found = assignments.find(
+            (a: any) => String(a.employeeId) === String(employeeId)
+          );
+          if (found?.branchId) {
+            assignedBranchId = found.branchId;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!assignedBranchId) {
       return NextResponse.json(
         { valid: false, message: "You are not assigned to any branch. Please contact your administrator." },
         { status: 200 }
@@ -62,7 +108,7 @@ export async function POST(req: Request) {
     // 2. Get the branch location and radius
     const branches: any[] = await query(
       "SELECT id, branchName, latitude, longitude, radius, address FROM branches WHERE id = ? LIMIT 1",
-      [employee.branchId]
+      [assignedBranchId]
     );
 
     if (!branches || branches.length === 0) {

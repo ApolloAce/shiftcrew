@@ -8,7 +8,7 @@ export type Branch = {
   longitude?: number | null
   city?: string | null
   province?: string | null
-  radius?: number // meters, default 100
+  radius?: number | null
   createdAt?: string
   updatedAt?: string
 }

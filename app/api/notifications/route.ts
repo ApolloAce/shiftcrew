@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query, execute } from "@/lib/mysql";
+import { query, execute, mysqlNow } from "@/lib/mysql";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const id = crypto.randomUUID();
-    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const now = mysqlNow();
 
     await execute(
       `INSERT INTO notifications (id, recipientId, title, message, type, isRead, createdAt)

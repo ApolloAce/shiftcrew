@@ -16,8 +16,8 @@ export async function POST(req: Request) {
 
   try {
     const rows = await query(
-      "SELECT * FROM users WHERE LOWER(email) = ? OR LOWER(firstName) = ? LIMIT 1",
-      [identifier, identifier]
+      "SELECT * FROM users WHERE email = ? LIMIT 1",
+      [identifier]
     );
 
     if (rows.length === 0) {
@@ -31,20 +31,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Invalid username or password" }, { status: 401 });
     }
 
-    const isAdmin = userDoc.role === "admin";
     const userData = {
       id: userDoc.id,
-      firstName: userDoc.firstName,
-      surname: userDoc.surname,
-      name: `${userDoc.firstName || ""} ${userDoc.surname || ""}`.trim(),
       email: userDoc.email,
       role: userDoc.role,
-      type: userDoc.type || "full-time",
-      isAdmin,
-      // Ensure isEmployee is false for admins to prevent routing ambiguity
-      isEmployee: !isAdmin && (userDoc.role === "employee" || !!userDoc.isEmployee),
-      status: userDoc.status || "approved",
+      name: `${userDoc.firstName} ${userDoc.surname}`,
+      firstName: userDoc.firstName,
+      surname: userDoc.surname,
+      isAdmin: userDoc.role === "admin",
+      isEmployee: !!userDoc.isEmployee,
       branchId: userDoc.branchId || null,
+      status: userDoc.status || "approved",
     };
 
     return NextResponse.json({ user: userData }, { status: 200 });

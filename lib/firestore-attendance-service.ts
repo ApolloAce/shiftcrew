@@ -6,11 +6,6 @@ export type AttendanceRecord = {
   employeeName?: string
   date: string
   status: "present" | "absent"
-  timeIn?: string
-  timeOut?: string
-  photoUrl?: string
-  latitude?: number
-  longitude?: number
   branchId?: string
   branchName?: string
   createdAt?: string

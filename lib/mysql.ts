@@ -18,6 +18,11 @@ export function getPool(): mysql.Pool {
   return pool;
 }
 
+/** Return current UTC timestamp in MySQL-compatible format (YYYY-MM-DD HH:MM:SS) */
+export function mysqlNow(): string {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
 /** Convenience: run a query and return typed rows */
 export async function query<T = any>(sql: string, params?: any[]): Promise<T[]> {
   const [rows] = await getPool().execute(sql, params);
