@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { getCurrentPosition, checkSpoofIndicators } from "@/lib/geolocation-helper"
+import { toLocalDateISO } from "@/lib/utils"
 
 export default function EmployeeAttendancePage() {
   const { showNotification } = useNotification()
@@ -59,7 +60,7 @@ export default function EmployeeAttendancePage() {
 
             // Fetch today's schedule to get the rotation-based branch assignment
             try {
-              const today = new Date().toISOString().split("T")[0]
+              const today = toLocalDateISO()
               const schedRes = await fetch(`/api/schedules?scheduleFor=${today}`)
               if (schedRes.ok) {
                 const schedules = await schedRes.json()
@@ -106,7 +107,7 @@ export default function EmployeeAttendancePage() {
 
   const fetchAttendanceData = async (userData: any) => {
     try {
-      const today = new Date().toISOString().split("T")[0]
+      const today = toLocalDateISO()
       const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd")
       const monthEnd = format(endOfMonth(new Date()), "yyyy-MM-dd")
 
@@ -214,7 +215,7 @@ export default function EmployeeAttendancePage() {
       }
 
       const now = new Date()
-      const today = now.toISOString().split("T")[0]
+      const today = toLocalDateISO(now)
       const timeIn = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {
@@ -268,7 +269,7 @@ export default function EmployeeAttendancePage() {
       }
 
       const now = new Date()
-      const today = now.toISOString().split("T")[0]
+      const today = toLocalDateISO(now)
       const timeOut = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {

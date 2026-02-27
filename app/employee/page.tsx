@@ -9,6 +9,7 @@ import { format } from "date-fns"
 import { Calendar, Clock, MapPin, AlertCircle, ShieldAlert, Navigation, Loader2, CheckCircle, XCircle } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { getCurrentPosition, checkSpoofIndicators, type GeoResult, type GeoError } from "@/lib/geolocation-helper"
+import { toLocalDateISO } from "@/lib/utils"
 
 export default function EmployeeDashboard() {
   const { showNotification } = useNotification()
@@ -50,7 +51,7 @@ export default function EmployeeDashboard() {
       // Fetch all data in parallel
       const fetchAll = async () => {
         try {
-          const today = new Date().toISOString().split("T")[0]
+          const today = toLocalDateISO()
 
           const [branchRes, attendanceRes, leaveRes] = await Promise.all([
             userData.branchId
@@ -226,7 +227,7 @@ export default function EmployeeDashboard() {
       }
 
       const now = new Date()
-      const today = now.toISOString().split("T")[0]
+      const today = toLocalDateISO(now)
       const timeIn = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {
@@ -280,7 +281,7 @@ export default function EmployeeDashboard() {
       }
 
       const now = new Date()
-      const today = now.toISOString().split("T")[0]
+      const today = toLocalDateISO(now)
       const timeOut = now.toTimeString().slice(0, 8)
 
       const res = await fetch("/api/attendance", {

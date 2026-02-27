@@ -8,6 +8,10 @@ REMOTE_DIR = "/var/www/shiftcrew"
 
 files = [
     "app/dashboard/scheduling/page.tsx",
+    "app/employee/attendance/page.tsx",
+    "app/employee/page.tsx",
+    "app/api/attendance/validate-location/route.ts",
+    "lib/utils.ts",
 ]
 
 step = sys.argv[1] if len(sys.argv) > 1 else "upload"

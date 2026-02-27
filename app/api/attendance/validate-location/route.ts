@@ -56,7 +56,9 @@ export async function POST(req: Request) {
 
     // Check today's schedule FIRST — this is the authoritative source for where
     // the employee should be today (admin may have rotated/manually assigned them).
-    const todayISO = new Date().toISOString().split("T")[0];
+    // Use Philippine local date (UTC+8) — avoids the bug where toISOString()
+    // returns yesterday's date after midnight PHT (because server may be UTC).
+    const todayISO = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
     const schedules: any[] = await query(
       "SELECT branchAssignments, assignments FROM schedules WHERE scheduleFor = ? OR date = ? ORDER BY updatedAt DESC",
       [todayISO, todayISO]
