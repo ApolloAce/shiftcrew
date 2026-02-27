@@ -51,7 +51,12 @@ export default function EmployeeNotificationsPage() {
   const fetchUpcomingShifts = async (userData: any) => {
     try {
       const today = new Date().toISOString().split("T")[0]
-      const res = await fetch(`/api/schedules`)
+      // Only fetch current and future schedules instead of all
+      const mondayDate = new Date()
+      const dayOfWeek = mondayDate.getDay()
+      mondayDate.setDate(mondayDate.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1))
+      const weekStart = mondayDate.toISOString().split("T")[0]
+      const res = await fetch(`/api/schedules?weekStart=${weekStart}`)
       if (!res.ok) return
 
       const schedules = await res.json()
@@ -59,7 +64,8 @@ export default function EmployeeNotificationsPage() {
 
       if (Array.isArray(schedules)) {
         for (const sched of schedules) {
-          if (sched.date < today) continue
+          const schedDate = sched.scheduleFor || sched.date
+          if (schedDate < today) continue
 
           let assignments = sched.branchAssignments
           if (typeof assignments === "string") {
@@ -73,11 +79,19 @@ export default function EmployeeNotificationsPage() {
               )
               if (found) {
                 const shiftObj = typeof found.shift === "object" && found.shift ? found.shift : null
+                // Map shift string to actual times
+                const shiftTimes = typeof found.shift === "string" ? (() => {
+                  switch (found.shift.toUpperCase()) {
+                    case "AM": return { start: "07:00", end: "14:00" }
+                    case "PM": return { start: "14:00", end: "22:00" }
+                    default: return { start: "", end: "" }
+                  }
+                })() : null
                 shifts.push({
                   id: sched.id,
                   date: sched.scheduleFor || sched.date,
-                  startTime: shiftObj?.start || sched.time || "TBD",
-                  endTime: shiftObj?.end || "TBD",
+                  startTime: shiftObj?.start || found.shiftStart || shiftTimes?.start || sched.time || "TBD",
+                  endTime: shiftObj?.end || found.shiftEnd || shiftTimes?.end || "TBD",
                   branchName: branch.branchName || "Unknown",
                   notes: sched.notes,
                 })

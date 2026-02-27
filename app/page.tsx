@@ -152,16 +152,7 @@ export default function LoginPage() {
           </form>
         </CardContent>
 
-        <CardFooter className="flex flex-col border-t border-primary-200 pt-6 bg-secondary-50 rounded-b-lg">
-          <div className="text-sm text-muted-foreground">
-            <p className="font-medium mb-2">Demo Accounts:</p>
-            <ul className="list-disc pl-5 space-y-1">
-              <li>Admin: admin / admin123</li>
-              <li>Employee: luis / luis123</li>
-              <li>Employee: jane@shiftmate.com / password123</li>
-            </ul>
-          </div>
-        </CardFooter>
+
       </Card>
     </div>
   )

@@ -147,15 +147,18 @@ export async function PUT(req: Request) {
   }
 }
 
-// DELETE /api/schedules?weekStart=YYYY-MM-DD
+// DELETE /api/schedules?weekStart=YYYY-MM-DD&preserveManual=true
 export async function DELETE(req: Request) {
   try {
     const url = new URL(req.url);
     const weekStart = url.searchParams.get("weekStart");
+    const preserveManual = url.searchParams.get("preserveManual") === "true";
     if (!weekStart) return NextResponse.json({ message: "Missing weekStart" }, { status: 400 });
 
-    // Delete by weekStart
-    await execute("DELETE FROM schedules WHERE weekStart = ?", [weekStart]);
+    const manualCondition = preserveManual ? " AND (manuallyScheduled = 0 OR manuallyScheduled IS NULL)" : "";
+
+    // Delete by weekStart (skip manually scheduled if requested)
+    await execute(`DELETE FROM schedules WHERE weekStart = ?${manualCondition}`, [weekStart]);
 
     // Also delete by each individual day of the week
     const startDate = new Date(weekStart + "T00:00:00");
@@ -163,7 +166,7 @@ export async function DELETE(req: Request) {
       const d = new Date(startDate);
       d.setDate(startDate.getDate() + i);
       const iso = d.toISOString().split("T")[0];
-      await execute("DELETE FROM schedules WHERE date = ?", [iso]);
+      await execute(`DELETE FROM schedules WHERE date = ?${manualCondition}`, [iso]);
     }
 
     return NextResponse.json({ success: true });
@@ -199,6 +202,7 @@ function groupAssignmentsByBranch(assignments: any[]) {
       employeeId: a.employeeId,
       employeeName: a.employeeName,
       isPresent: a.isPresent,
+      isManual: a.isManual || false,
       shift: a.shift,
       shiftStart: a.shiftStart,
       shiftEnd: a.shiftEnd,

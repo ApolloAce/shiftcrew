@@ -60,8 +60,8 @@ export default function EmployeeDashboard() {
             fetch(`/api/leave?employeeId=${userData.id}&status=pending`).then((r) => r.ok ? r.json() : []),
           ])
 
+          // Set initial branch from users table; schedule-based branch will override below
           setAssignedBranch(branchRes)
-          // If no direct branchId, we'll try to get branch from today's schedule later
           setPendingLeaves(Array.isArray(leaveRes) ? leaveRes : [])
 
           // Find today's attendance record
@@ -108,8 +108,8 @@ export default function EmployeeDashboard() {
                             branchName: branch.branchName || "Unknown",
                             notes: sched.notes || "",
                           })
-                          // Also set assignedBranch from schedule if not set from direct branchId
-                          if (!userData.branchId && branch.branchId) {
+                          // Always use today's schedule branch as the assigned branch (rotation-aware)
+                          if (branch.branchId) {
                             try {
                               const brRes = await fetch(`/api/branches?id=${branch.branchId}`)
                               if (brRes.ok) {

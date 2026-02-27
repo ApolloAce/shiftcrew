@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -13,7 +13,7 @@ import { useNotification } from "@/components/notification-provider"
 import { useCrewStore } from "@/lib/cleanStore"
 import { getAllBranches as getBranchesFromFirestore } from "@/lib/firestore-branch-service"
 import { getActiveEmployees as getEmployeesFromFirestore } from "@/lib/firestore-employee-service"
-import { addSchedule as addScheduleToFirestore, getSchedulesForDate as getSchedulesForDateFromFirestore, deleteSchedulesForWeek } from "@/lib/firestore-schedule-service"
+import { addSchedule as addScheduleToFirestore, getSchedulesForDate as getSchedulesForDateFromFirestore, getSchedulesForWeek as getSchedulesForWeekFromFirestore, deleteSchedulesForWeek } from "@/lib/firestore-schedule-service"
 import { saveManualOverride, getOverridesForWeek } from "@/lib/firestore-manual-override-service"
 import { updateEmployee } from "@/lib/firestore-employee-service"
 import { Search, RotateCcw, Edit, Calendar, Users, AlertTriangle, Clock } from "lucide-react"
@@ -25,6 +25,40 @@ function getShiftTimes(shift: string): { shiftStart: string; shiftEnd: string } 
     case "AM":
     default: return { shiftStart: "07:00", shiftEnd: "14:00" }
   }
+}
+
+// Send schedule notifications to each employee about their branch assignment
+async function sendScheduleNotifications(
+  assignments: Array<{ employeeId: string; employeeName: string; branchName?: string; shift?: string }>,
+  weekLabel: string
+) {
+  const grouped = new Map<string, { employeeName: string; branchName: string; shift: string }>()
+  for (const a of assignments) {
+    // Deduplicate: one notification per employee (use latest assignment)
+    grouped.set(a.employeeId, {
+      employeeName: a.employeeName,
+      branchName: a.branchName || "Unassigned",
+      shift: a.shift || "AM",
+    })
+  }
+
+  const promises: Promise<any>[] = []
+  for (const [employeeId, info] of grouped) {
+    const shiftLabel = info.shift === "PM" ? "PM (2pm - 10pm)" : "AM (7am - 2pm)"
+    promises.push(
+      fetch("/api/notifications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipientId: employeeId,
+          title: "New Schedule Assignment",
+          message: `You have been assigned to ${info.branchName} for the week of ${weekLabel} — ${shiftLabel} shift.`,
+          type: "schedule",
+        }),
+      }).catch((err) => console.warn("[Notification] Failed to send to", employeeId, err))
+    )
+  }
+  await Promise.allSettled(promises)
 }
 
 // Scheduling now uses live store data. No local sampleEmployees are present so the app starts empty.
@@ -58,26 +92,51 @@ export default function SchedulingPage() {
   const [fireBranches, setFireBranches] = useState<Array<any>>([])
   const [fireEmployees, setFireEmployees] = useState<Array<any>>([])
 
-  // derive a lightweight list of branches for the rotation algorithm — prefer Firestore branches if available, otherwise fall back to store branches
-  const branchesList = (fireBranches.length > 0
-    ? fireBranches.map((b: any) => ({ id: b.id, name: b.branchName || b.name, address: b.address }))
-    : (branches || []).map((b: any) => ({ id: b.id, name: b.branchName, address: b.address })))
+  // derive a lightweight list of branches for the rotation algorithm — memoized
+  const branchesList = useMemo(() => (
+    fireBranches.length > 0
+      ? fireBranches.map((b: any) => ({ id: b.id, name: b.branchName || b.name, address: b.address }))
+      : (branches || []).map((b: any) => ({ id: b.id, name: b.branchName, address: b.address }))
+  ), [fireBranches, branches])
 
   // whether at least one crew has been assigned to a branch (used to require initial manual seeding)
   const crews = storeCrews
-  const hasInitialAssignments = crews.some((c) => (getAssignedBranch ? getAssignedBranch(c.id) : null))
+  const hasInitialAssignments = useMemo(() => crews.some((c) => (getAssignedBranch ? getAssignedBranch(c.id) : null)), [crews, getAssignedBranch])
 
   // True when at least one crew/employee source has data (MySQL API employees OR Zustand store)
-  const hasAnyEmployees = (fireEmployees && fireEmployees.length > 0) || crews.length > 0
+  const hasAnyEmployees = useMemo(() => (fireEmployees && fireEmployees.length > 0) || crews.length > 0, [fireEmployees, crews])
+
+  // Lookup map: branchId → branch object (O(1) instead of O(n) per lookup)
+  const fireBranchMap = useMemo(() => {
+    const map = new Map<string, any>()
+    for (const b of fireBranches) map.set(String(b.id), b)
+    return map
+  }, [fireBranches])
+
+  // Lookup map: branchName → branch object
+  const fireBranchByName = useMemo(() => {
+    const map = new Map<string, any>()
+    for (const b of fireBranches) {
+      if (b.branchName) map.set(b.branchName, b)
+      if (b.name && b.name !== b.branchName) map.set(b.name, b)
+    }
+    return map
+  }, [fireBranches])
   
-  // Helper function to get Firestore employees for a specific branch
-  // Includes both employees with branchId set AND manually assigned employees
-  const getFirestoreEmployeesForBranch = (branchId: string | number) => {
-    const branch = fireBranches.find((b) => String(b.id) === String(branchId))
+  const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
+
+  // Helper function to get Firestore employees for a specific branch — uses lookup maps
+  const getFirestoreEmployeesForBranch = useCallback((branchId: string | number) => {
+    const branch = fireBranchMap.get(String(branchId))
     const branchName = branch?.branchName
 
     // Get employees with branchId matching (from Firestore)
-    const firestoreMatches = fireEmployees.filter((emp: any) => String(emp.branchId) === String(branchId))
+    // Exclude employees that have been manually overridden to a DIFFERENT branch
+    const firestoreMatches = fireEmployees.filter((emp: any) => {
+      const manualBranch = manualAssignments[String(emp.id)]
+      if (manualBranch && manualBranch !== branchName) return false
+      return String(emp.branchId) === String(branchId)
+    })
 
     // Get manually assigned employees for this branch
     const manuallyAssigned = fireEmployees.filter((emp: any) => {
@@ -94,7 +153,7 @@ export default function SchedulingPage() {
     }
 
     return combined
-  }
+  }, [fireBranchMap, fireEmployees, manualAssignments])
   
   const [selectedDate, setSelectedDate] = useState(() => {
     // Initialize to Monday of current week
@@ -115,11 +174,15 @@ export default function SchedulingPage() {
   const [lastAssignmentSnapshot, setLastAssignmentSnapshot] = useState<Array<{ crewId: number; prevBranchId: number | null }>>([])
   const [undoAvailable, setUndoAvailable] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<number | string | null>(null)
-  const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
   const [pendingAssignments, setPendingAssignments] = useState<Record<string, string>>({})
   const [weeklyOverrides, setWeeklyOverrides] = useState<any[]>([])
-  const [expandedDays, setExpandedDays] = useState<Set<number>>(new Set([0]))
+  const [expandedDays, setExpandedDays] = useState<Set<number>>(() => {
+    const d = new Date().getDay()
+    const idx = d === 0 ? 6 : d - 1 // Mon=0 .. Sun=6
+    return new Set([idx])
+  })
   const [weekSchedules, setWeekSchedules] = useState<Record<string, any>>({})
+  const [weekAttendance, setWeekAttendance] = useState<Record<string, Record<string, string>>>({})
 
   const generateRotation = (opts?: { avoidSameBranch?: boolean }) => {
     // Prefer Firestore employees for preview/rotation when available; fall back to store crews
@@ -134,10 +197,11 @@ export default function SchedulingPage() {
       })
 
       const assignedBranch = matchedStoreCrew && getAssignedBranch ? getAssignedBranch(matchedStoreCrew.id) : null
-      const idForPreview = matchedStoreCrew ? matchedStoreCrew.id : (c.id ?? `fire-${idx}`)
+      const storeCrewId = matchedStoreCrew ? matchedStoreCrew.id : null
 
       return {
-        id: idForPreview,
+        id: c.id ?? `fire-${idx}`,       // Always use Firestore ID (matches manualAssignments keys)
+        storeCrewId,                       // Store crew ID for assignCrewToBranch calls
         firstName: c.firstName,
         surname: c.surname,
         email: c.email,
@@ -235,7 +299,7 @@ export default function SchedulingPage() {
       const emp = lightweight.find((e) => String(e.id) === String(id))
       const branchName = manualAssignments[idStr]
       if (emp && branchName) {
-        assignedResults.push({ ...emp, nextWeekBranch: branchName, nextWeekShift: emp.shift || "AM" })
+        assignedResults.push({ ...emp, nextWeekBranch: branchName, nextWeekShift: emp.shift || "AM", isManual: true })
         // reduce desired immediately
         if (typeof desired[branchName] === "number") desired[branchName] = Math.max(0, desired[branchName] - 1)
       }
@@ -275,20 +339,15 @@ export default function SchedulingPage() {
   }, [crews.length, branchesList.length])
 
   // Fetch Firestore branches and employees for scheduling persistence and UI
-  useEffect(() => {
-    const fetchFireData = async () => {
-      try {
-        const [b, e] = await Promise.all([getBranchesFromFirestore(), getEmployeesFromFirestore()])
-        setFireBranches(b)
-        setFireEmployees(e)
-        console.log("Firestore branches/employees loaded:", b.length, e.length)
-      } catch (err) {
-        console.error("Error loading Firestore scheduling data:", err)
-      }
+  const fetchFireData = async () => {
+    try {
+      const [b, e] = await Promise.all([getBranchesFromFirestore(), getEmployeesFromFirestore()])
+      setFireBranches(b)
+      setFireEmployees(e)
+    } catch (err) {
+      console.error("Error loading Firestore scheduling data:", err)
     }
-
-    fetchFireData()
-  }, [])
+  }
 
   // Fetch current week's manual overrides
   const fetchWeeklyOverrides = async () => {
@@ -296,59 +355,83 @@ export default function SchedulingPage() {
       const today = formatDateLocal(new Date())
       const overrides = await getOverridesForWeek(today)
       setWeeklyOverrides(overrides)
-      console.log("Weekly overrides loaded:", overrides.length)
     } catch (err) {
       console.error("Error fetching weekly overrides:", err)
     }
   }
 
+  // Fetch actual attendance records for the current week
+  const fetchWeekAttendance = async () => {
+    try {
+      const today = new Date()
+      const dayOfWeek = today.getDay()
+      const monday = new Date(today)
+      monday.setDate(today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1))
+
+      const result: Record<string, Record<string, string>> = {}
+      const fetches = []
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(monday)
+        d.setDate(monday.getDate() + i)
+        const dateISO = formatDateLocal(d)
+        // Only fetch for today and past days (not future)
+        if (d <= today) {
+          fetches.push(
+            fetch(`/api/attendance?date=${dateISO}`, { cache: 'no-store' })
+              .then(r => r.ok ? r.json() : [])
+              .then((records: any[]) => {
+                const lookup: Record<string, string> = {}
+                if (Array.isArray(records)) {
+                  for (const rec of records) {
+                    lookup[String(rec.employeeId)] = rec.status
+                  }
+                }
+                result[dateISO] = lookup
+              })
+          )
+        }
+      }
+      await Promise.all(fetches)
+      setWeekAttendance(result)
+    } catch (err) {
+      console.error("Error fetching week attendance:", err)
+    }
+  }
+
+  // Single consolidated mount effect — all initial data loads in parallel
   useEffect(() => {
-    fetchWeeklyOverrides()
-    fetchWeekSchedulesFromFirestore()
+    Promise.all([
+      fetchFireData(),
+      fetchWeeklyOverrides(),
+      fetchWeekSchedulesFromFirestore(),
+      fetchCurrentWeekSchedule(),
+      fetchWeekAttendance(),
+    ])
   }, [])
 
   // Fetch current week's schedule and load it into appliedRotation
   const fetchCurrentWeekSchedule = async () => {
     try {
-      // Look for any saved schedule within the current week (Mon-Sun) and use the latest one
       const todayDate = new Date()
       const day = todayDate.getDay()
       const monday = new Date(todayDate)
       monday.setDate(todayDate.getDate() - day + (day === 0 ? -6 : 1))
+      const mondayISO = formatDateLocal(monday)
 
-      let foundSchedules: Array<any> = []
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday)
-        d.setDate(monday.getDate() + i)
-        const iso = formatDateLocal(d)
-        try {
-          const schedules = await getSchedulesForDateFromFirestore(iso)
-          console.log("[Fetch Schedules] Query for", iso, "found", schedules?.length || 0, "documents")
-          if (schedules && schedules.length > 0) {
-            // Use document's own scheduleFor if available, otherwise use query date
-            schedules.forEach((s: any) => {
-              s._scheduleDate = s.scheduleFor || iso
-              console.log("[Fetch Schedules] Document:", { date: s.date, scheduleFor: s.scheduleFor, weekStart: s.weekStart, weekEnd: s.weekEnd, _scheduleDate: s._scheduleDate })
-            })
-            foundSchedules = foundSchedules.concat(schedules)
-          }
-        } catch (e) {
-          console.warn("Error fetching schedules for", iso, e)
-        }
-      }
+      // Single API call instead of 7 sequential per-day calls
+      const foundSchedules = await getSchedulesForWeekFromFirestore(mondayISO)
 
-      console.log("[Fetch Schedules] Total found:", foundSchedules.length, "documents")
-      if (foundSchedules.length > 0) {
+      if (foundSchedules && foundSchedules.length > 0) {
         // pick the most recently updated/created schedule among all found
-        const latestSchedule = foundSchedules.sort((a: any, b: any) => {
+        const latestSchedule = [...foundSchedules].sort((a: any, b: any) => {
           const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
           const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
           return dateB - dateA
         })[0]
-        console.log("[Fetch Schedules] Latest schedule:", { date: latestSchedule.date, scheduleFor: latestSchedule.scheduleFor, weekStart: latestSchedule.weekStart, weekEnd: latestSchedule.weekEnd, _scheduleDate: latestSchedule._scheduleDate })
 
         if (latestSchedule.branchAssignments && latestSchedule.branchAssignments.length > 0) {
           const rotationData: any[] = []
+          const restoredManual: Record<string, string> = {}
           for (const branchAssignment of latestSchedule.branchAssignments) {
             for (const employee of branchAssignment.employees) {
               rotationData.push({
@@ -357,18 +440,22 @@ export default function SchedulingPage() {
                 surname: employee.employeeName ? employee.employeeName.split(" ").slice(1).join(" ") : "",
                 nextWeekBranch: branchAssignment.branchName,
                 nextWeekShift: employee.shift || "AM",
+                isManual: employee.isManual || false,
               })
+              // Restore persisted manual assignments so they survive page reload
+              if (employee.isManual) {
+                restoredManual[String(employee.employeeId)] = branchAssignment.branchName
+              }
             }
           }
           setAppliedRotation(rotationData)
-          // Always calculate week bounds from the schedule date to ensure consistency
-          const scheduleDate = latestSchedule._scheduleDate || latestSchedule.scheduleFor || latestSchedule.date
-          console.log("[Schedule Week] Schedule date:", scheduleDate)
-          
+          // Restore manual assignments from persisted data
+          if (Object.keys(restoredManual).length > 0) {
+            setManualAssignments((prev) => ({ ...prev, ...restoredManual }))
+          }
+          const scheduleDate = latestSchedule.scheduleFor || latestSchedule.date
           const weekBounds = getWeekBoundsFromDate(scheduleDate)
-          console.log("[Schedule Week] Calculated week bounds:", weekBounds)
           setAppliedScheduleWeek(weekBounds)
-          console.log("Current week schedule loaded from week:", latestSchedule._scheduleDate, rotationData.length, "assignments")
         }
       }
     } catch (err) {
@@ -383,30 +470,25 @@ export default function SchedulingPage() {
       const dayOfWeek = today.getDay()
       const monday = new Date(today)
       monday.setDate(today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1))
+      const mondayISO = formatDateLocal(monday)
+
+      // Single API call instead of 7 sequential per-day calls
+      const allSchedules = await getSchedulesForWeekFromFirestore(mondayISO)
 
       const schedulesByDate: Record<string, any> = {}
-      
-      // Fetch schedules for each day of the week via API
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday)
-        d.setDate(monday.getDate() + i)
-        const dateISO = formatDateLocal(d)
-        
-        try {
-          const schedules = await getSchedulesForDateFromFirestore(dateISO)
-          
-          if (schedules && schedules.length > 0) {
-            // Use the most recent schedule for this date
-            let latestSchedule = schedules.sort((a: any, b: any) => {
-              const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-              const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-              return dateB - dateA
-            })[0]
-            
+
+      if (allSchedules && allSchedules.length > 0) {
+        for (const sched of allSchedules) {
+          const dateKey = sched.scheduleFor || sched.date
+          if (!dateKey) continue
+
+          // Keep only the most recent schedule per date
+          const existing = schedulesByDate[dateKey]
+          if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
             // Transform flat assignments to branchAssignments if needed
-            if (latestSchedule.assignments && !latestSchedule.branchAssignments) {
+            if (sched.assignments && !sched.branchAssignments) {
               const branchMap: Record<string, any> = {}
-              for (const assignment of latestSchedule.assignments) {
+              for (const assignment of sched.assignments) {
                 const branchName = assignment.branchName || "Unknown"
                 if (!branchMap[branchName]) {
                   branchMap[branchName] = {
@@ -421,27 +503,21 @@ export default function SchedulingPage() {
                   shift: assignment.shift || "AM"
                 })
               }
-              latestSchedule.branchAssignments = Object.values(branchMap)
+              sched.branchAssignments = Object.values(branchMap)
             }
-            
-            schedulesByDate[dateISO] = latestSchedule
+
+            schedulesByDate[dateKey] = sched
           }
-        } catch (e) {
-          console.warn("Error fetching schedule for", dateISO, e)
         }
       }
-      
+
       setWeekSchedules(schedulesByDate)
     } catch (err) {
       console.error("Error fetching week schedules:", err)
     }
   }
 
-  useEffect(() => {
-    fetchCurrentWeekSchedule()
-  }, [])
-
-  // Generate next week's rotation preview (auto-updates when week changes or data changes)
+  // Generate next week's rotation preview (auto-updates when data changes)
   useEffect(() => {
     const generateNextWeekPreview = () => {
       const preview = generateRotation({ avoidSameBranch: true })
@@ -450,8 +526,8 @@ export default function SchedulingPage() {
 
     generateNextWeekPreview()
 
-    // Update preview daily to catch week changes
-    const interval = setInterval(generateNextWeekPreview, 60000) // Update every minute
+    // Update preview hourly (only needs to detect week change)
+    const interval = setInterval(generateNextWeekPreview, 3600000)
     return () => clearInterval(interval)
   }, [crews.length, branchesList.length, fireEmployees.length])
 
@@ -463,18 +539,15 @@ export default function SchedulingPage() {
 
   const confirmRegenerate = async () => {
     try {
-      console.log("[Regenerate] Starting regeneration process...")
       // Snapshot current assignments (crew -> branchId|null)
       const snapshot = crews.map((c) => {
         const assigned = getAssignedBranch ? getAssignedBranch(c.id) : null
         return { crewId: c.id, prevBranchId: assigned ? assigned.id : null }
       })
       setLastAssignmentSnapshot(snapshot)
-      console.log("[Regenerate] Snapshot created:", snapshot.length, "crews")
 
       // Generate rotation and apply
       const next = generateRotation({ avoidSameBranch: true })
-      console.log("[Regenerate] Rotation generated:", next?.length || 0, "employees")
       if (!next || next.length === 0) {
         showNotification("info", "Rotation Generated", "No assignments generated. Ensure branches and crews exist.")
         setShowRegenerateConfirm(false)
@@ -488,7 +561,7 @@ export default function SchedulingPage() {
       const todayISO = formatDateLocal(new Date())
 
       // Build assignments for the regenerated rotation
-      const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
+      const regeneratedAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string; isManual?: boolean }> = []
 
       for (const emp of next) {
         // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
@@ -497,8 +570,7 @@ export default function SchedulingPage() {
         if (targetBranch) {
           // update in-memory store assignment (keeps other app logic working)
           try {
-            assignCrewToBranch(emp.id, targetBranch.id)
-            console.log("[Regenerate] Assigned crew", emp.id, "to branch", targetBranch.id)
+            if (emp.storeCrewId) assignCrewToBranch(emp.storeCrewId, targetBranch.id)
           } catch (e) {
             console.warn("[Regenerate] assignCrewToBranch failed for", emp.id, targetBranch.id, e)
           }
@@ -527,6 +599,7 @@ export default function SchedulingPage() {
             branchId,
             branchName,
             shift: shiftType,
+            isManual: !!emp.isManual,
             ...getShiftTimes(shiftType),
           })
         }
@@ -546,48 +619,66 @@ export default function SchedulingPage() {
           const currentMondayISO = formatDateLocal(currentMonday)
           const currentSundayISO = (() => { const s = new Date(currentMonday); s.setDate(currentMonday.getDate()+6); return formatDateLocal(s) })()
 
-          // Delete any existing schedules for current week
+          // Delete any existing schedules for current week (preserve manually scheduled ones)
           try {
-            await deleteSchedulesForWeek(currentMondayISO)
+            await deleteSchedulesForWeek(currentMondayISO, true)
           } catch (err) {
             console.warn("[Regenerate] Could not delete existing schedules for current week:", err)
           }
 
-          // Save 7 schedule documents (one per day of the week)
-          const savedDates: string[] = []
+          // Batch-fetch remaining manual dates (1 call instead of 7)
+          const manualDates = new Set<string>()
+          try {
+            const weekScheds = await getSchedulesForWeekFromFirestore(currentMondayISO)
+            for (const s of weekScheds) {
+              if (s.manuallyScheduled && s.scheduleFor) manualDates.add(s.scheduleFor)
+            }
+          } catch {}
+
+          // Build assignment payload once (shared across all days)
+          const assignmentPayload = regeneratedAssignments.map((a) => ({
+            employeeId: a.employeeId,
+            employeeName: a.employeeName,
+            branchId: a.branchId,
+            branchName: a.branchName,
+            isPresent: false,
+            isManual: a.isManual || false,
+            shift: a.shift,
+            shiftStart: a.shiftStart,
+            shiftEnd: a.shiftEnd,
+          }))
+
+          // Save 7 schedule documents in parallel, skip manually scheduled dates
+          const savePromises: Promise<string | null>[] = []
           for (let i = 0; i < 7; i++) {
             const d = new Date(currentMonday)
             d.setDate(currentMonday.getDate() + i)
             const dayISO = formatDateLocal(d)
 
-            try {
-              await addScheduleToFirestore({
-                date: currentMondayISO, // Save date is Monday of the week
-                scheduleFor: dayISO, // Specific date this schedule is for
+            if (manualDates.has(dayISO)) continue
+
+            savePromises.push(
+              addScheduleToFirestore({
+                date: currentMondayISO,
+                scheduleFor: dayISO,
                 time: startTime,
                 weekStart: currentMondayISO,
                 weekEnd: currentSundayISO,
-                assignments: regeneratedAssignments.map((a) => ({
-                  employeeId: a.employeeId,
-                  employeeName: a.employeeName,
-                  branchId: a.branchId,
-                  branchName: a.branchName,
-                  isPresent: true,
-                  shift: a.shift,
-                  shiftStart: a.shiftStart,
-                  shiftEnd: a.shiftEnd,
-                })),
-              })
-              savedDates.push(dayISO)
-            } catch (e) {
-              console.warn("[Regenerate] Failed to save schedule for", dayISO, e)
-            }
+                assignments: assignmentPayload,
+              }).then(() => dayISO).catch(() => null)
+            )
           }
+
+          const results = await Promise.all(savePromises)
+          const savedDates = results.filter(Boolean) as string[]
 
           if (savedDates.length > 0) {
             const branchNames = [...new Set(regeneratedAssignments.map((a) => a.branchName))].join(", ")
             showNotification("success", "Schedule Saved", `Regenerated schedule saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) for branches: ${branchNames}`)
-            console.log("[Regenerate] Saved schedules for dates:", savedDates)
+            await sendScheduleNotifications(regeneratedAssignments, `${savedDates[0]} - ${savedDates[savedDates.length - 1]}`)
+
+            // Refresh employee data so the UI reflects updated branches
+            await fetchFireData()
           } else {
             showNotification("info", "Save Warning", "Regenerated rotation could not be saved for the current week.")
           }
@@ -641,7 +732,11 @@ export default function SchedulingPage() {
 
   const handleManualAssignment = (employeeId: string | number, branchName: string) => {
     const key = String(employeeId)
-    // Save to pending assignments first; user must confirm to commit
+    // Update manual assignments immediately so branch cards reflect the change
+    setManualAssignments((prev) => ({
+      ...prev,
+      [key]: branchName,
+    }))
     setPendingAssignments((prev) => ({
       ...prev,
       [key]: branchName,
@@ -767,10 +862,8 @@ export default function SchedulingPage() {
     }
 
     try {
-      console.log("[Manual Schedule] Saving schedule for date:", selectedDate)
-
       // Build complete assignments array (rotated + manual)
-      const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
+      const allAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string; isManual?: boolean }> = []
 
       // Add rotated employees if any
       if (rotatedEmployees && rotatedEmployees.length > 0) {
@@ -797,34 +890,37 @@ export default function SchedulingPage() {
             branchId,
             branchName,
             shift: shiftType,
+            isManual: false,
             ...getShiftTimes(shiftType),
           })
         }
       }
 
-      // Add manual assignments
+      // Add manual assignments (override any rotation assignment for the same employee)
       for (const [employeeIdStr, branchName] of Object.entries(manualAssignments)) {
         const branch = fireBranches.find((b) => b.branchName === branchName)
         const employee = fireEmployees.find((e) => String(e.id) === employeeIdStr) || crews.find((c) => String(c.id) === employeeIdStr)
 
         if (employee && branch) {
-          // Check if this employee-branch combo is already in rotated
-          const alreadyAdded = allAssignments.some(
-            (a) => String(a.employeeId) === String(employee.id) && String(a.branchId) === String(branch.id),
-          )
-
           const employeeName = `${employee.firstName} ${employee.surname}`
 
-          if (!alreadyAdded) {
-            allAssignments.push({
-              employeeId: String(employee.id),
-              employeeName,
-              branchId: String(branch.id),
-              branchName: branch.branchName || branch.name,
-              shift: "AM",
-              ...getShiftTimes("AM"),
-            })
+          // Remove any existing assignment for this employee (manual overrides rotation)
+          const existingIdx = allAssignments.findIndex(
+            (a) => String(a.employeeId) === String(employee.id),
+          )
+          if (existingIdx !== -1) {
+            allAssignments.splice(existingIdx, 1)
           }
+
+          allAssignments.push({
+            employeeId: String(employee.id),
+            employeeName,
+            branchId: String(branch.id),
+            branchName: branch.branchName || branch.name,
+            shift: "AM",
+            isManual: true,
+            ...getShiftTimes("AM"),
+          })
 
           // Save as manual override in separate collection
           try {
@@ -839,7 +935,6 @@ export default function SchedulingPage() {
               shift: "AM",
               reason: "Manual override for schedule",
             })
-            console.log(`✓ Manual override saved for ${employeeName} on ${selectedDate}`)
           } catch (err) {
             console.error("Error saving manual override:", err)
           }
@@ -849,9 +944,7 @@ export default function SchedulingPage() {
       // Save single document for the selected date (not the entire week)
       if (allAssignments.length > 0) {
         try {
-          console.log("[Manual Schedule] Saving schedule for date:", selectedDate, "with", allAssignments.length, "assignments")
-
-          // Delete any existing schedule for just this date (handled by addSchedule upsert)
+          // Save single schedule document for the selected date
           // Save single schedule document for the selected date
           const currentTime = new Date().toTimeString().slice(0, 5)
           
@@ -870,16 +963,21 @@ export default function SchedulingPage() {
               employeeName: a.employeeName,
               branchId: a.branchId,
               branchName: a.branchName,
-              isPresent: true,
+              isPresent: false,
+              isManual: a.isManual || false,
               shift: a.shift,
               shiftStart: a.shiftStart,
               shiftEnd: a.shiftEnd,
             })),
           })
 
-          console.log("[Manual Schedule] Successfully saved schedule for", selectedDate, "Document ID:", savedId)
           const branchNames = [...new Set(allAssignments.map(a => a.branchName))].join(", ")
           showNotification("success", "Schedule Saved", `Manual schedule saved for ${selectedDate} with ${allAssignments.length} crew members across: ${branchNames}`)
+          // Send notifications to employees about their new assignments
+          await sendScheduleNotifications(allAssignments, selectedDate)
+
+          // Refresh employee data so the UI reflects updated branches
+          await fetchFireData()
           
           // Refresh the current week schedule display to show updated week bounds
           await fetchCurrentWeekSchedule()
@@ -934,7 +1032,8 @@ export default function SchedulingPage() {
                   employeeName: `${emp.firstName} ${emp.surname}`,
                   branchId: branchesList.find((b) => b.name === emp.nextWeekBranch)?.id || "",
                   branchName: emp.nextWeekBranch,
-                  isPresent: true,
+                  isPresent: false,
+                  isManual: emp.isManual || false,
                   shift: shiftType,
                   shiftStart,
                   shiftEnd,
@@ -973,90 +1072,60 @@ export default function SchedulingPage() {
       checkAndPromoteSchedule()
       return () => clearInterval(interval)
     }, [nextWeekRotationPreview, branchesList])
-  const getWeekBoundsFromDate = (dateStr: string) => {
-    // Parse as local date to avoid timezone issues
+  const getWeekBoundsFromDate = useCallback((dateStr: string) => {
     const parts = dateStr.split("-")
     const date = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]))
     const currentDay = date.getDay()
-    console.log("[getWeekBoundsFromDate] Input:", dateStr, "Parsed date:", date.toDateString(), "Day of week:", currentDay, "(0=Sunday)")
-    
-    // For Philippine standard (Monday-Sunday): Handle Sunday (day 0) specially
     const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay
     const monday = new Date(date)
     monday.setDate(date.getDate() + daysToMonday)
-    
     const sunday = new Date(monday)
     sunday.setDate(monday.getDate() + 6)
-    
-    const weekStart = formatDateLocal(monday)
-    const weekEnd = formatDateLocal(sunday)
-    console.log("[getWeekBoundsFromDate] Calculated:", weekStart, "-", weekEnd)
-    
     return {
-      weekStart,
-      weekEnd,
+      weekStart: formatDateLocal(monday),
+      weekEnd: formatDateLocal(sunday),
     }
-  }
+  }, [])
 
-  const getCurrentWeekDates = () => {
+  const currentWeekDates = useMemo(() => {
     const today = new Date()
     const currentDay = today.getDay()
-    // For Philippine standard (Monday-Sunday): Handle Sunday (day 0) specially
     const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay
     const monday = new Date(today)
     monday.setDate(today.getDate() + daysToMonday)
-
     const sunday = new Date(monday)
     sunday.setDate(monday.getDate() + 6)
+    const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    return `${fmt(monday)} - ${fmt(sunday)}`
+  }, [])
 
-    const formatDate = (date: Date) => {
-      return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    }
-
-    return `${formatDate(monday)} - ${formatDate(sunday)}`
-  }
-
-  const getNextWeekDates = () => {
+  const nextWeekDates = useMemo(() => {
     const today = new Date()
     const currentDay = today.getDay()
-    // Get Monday of current week first
     const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay
     const currentMonday = new Date(today)
     currentMonday.setDate(today.getDate() + daysToMonday)
-    
-    // Next week Monday is 7 days after current week Monday
     const nextMonday = new Date(currentMonday)
     nextMonday.setDate(currentMonday.getDate() + 7)
-
     const nextSunday = new Date(nextMonday)
     nextSunday.setDate(nextMonday.getDate() + 6)
+    const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    return `${fmt(nextMonday)} - ${fmt(nextSunday)}`
+  }, [])
 
-    const formatDate = (date: Date) => {
-      return date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    }
-
-    return `${formatDate(nextMonday)} - ${formatDate(nextSunday)}`
-  }
-
-  const getNextMondayDate = () => {
+  const nextMondayDate = useMemo(() => {
     const today = new Date()
     const currentDay = today.getDay()
-    // Get Monday of current week first
     const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay
     const currentMonday = new Date(today)
     currentMonday.setDate(today.getDate() + daysToMonday)
-    
-    // Next week Monday is 7 days after current week Monday
     const nextMonday = new Date(currentMonday)
     nextMonday.setDate(currentMonday.getDate() + 7)
+    return nextMonday.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+  }, [])
 
-    return nextMonday.toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-    })
-  }
+  // Compute today's ISO string once per render (not per employee in loops)
+  const todayISO = formatDateLocal(new Date())
 
   return (
     <div className="space-y-8">
@@ -1090,7 +1159,7 @@ export default function SchedulingPage() {
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4" />
                   <span className="text-sm font-medium">Next Rotation:</span>
-                  <Badge variant="outline">{getNextMondayDate()}</Badge>
+                  <Badge variant="outline">{nextMondayDate}</Badge>
                 </div>
                 <div className="flex items-center gap-2">
                   <Users className="h-4 w-4" />
@@ -1102,13 +1171,8 @@ export default function SchedulingPage() {
                 <div className="flex gap-2">
                   <Button
                     onClick={() => {
-                      // Generate a new rotation from the current schedule and open the dialog.
-                      const next = generateRotation({ avoidSameBranch: true })
-                      setRotatedEmployees(next)
-                      setShowRotationPreview(true)
-                      if (!next || next.length === 0) {
-                        showNotification("info", "No Rotation Generated", "No rotation generated. Ensure branches and crews exist.")
-                      }
+                      // Show Yes/No confirmation before generating
+                      setShowRegenerateConfirm(true)
                     }}
                     disabled={branchesList.length === 0 || !hasAnyEmployees}
                   >
@@ -1150,7 +1214,7 @@ export default function SchedulingPage() {
                 {appliedScheduleWeek && appliedScheduleWeek.weekStart && appliedScheduleWeek.weekEnd ? (
                   `${new Date(appliedScheduleWeek.weekStart).toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${new Date(appliedScheduleWeek.weekEnd).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
                 ) : (
-                  getCurrentWeekDates()
+                  currentWeekDates
                 )}
                 )
               </CardTitle>
@@ -1183,10 +1247,8 @@ export default function SchedulingPage() {
                               </div>
                               <div className="space-y-2">
                                 {amShift.map((employee) => {
-                                  // Check if this employee has a manual override for today
-                                  const today = formatDateLocal(new Date())
                                   const override = weeklyOverrides.find(
-                                    (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                    (o) => String(o.employeeId) === String(employee.id) && o.date === todayISO
                                   )
                                   
                                   return (
@@ -1220,10 +1282,8 @@ export default function SchedulingPage() {
                               </div>
                               <div className="space-y-2">
                                 {pmShift.map((employee) => {
-                                  // Check if this employee has a manual override for today
-                                  const today = formatDateLocal(new Date())
                                   const override = weeklyOverrides.find(
-                                    (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                    (o) => String(o.employeeId) === String(employee.id) && o.date === todayISO
                                   )
                                   
                                   return (
@@ -1252,10 +1312,8 @@ export default function SchedulingPage() {
                           {amShift.length === 0 && pmShift.length === 0 && crewForBranch.length > 0 && (
                             <div className="space-y-2">
                               {crewForBranch.map((employee) => {
-                                // Check if this employee has a manual override for today
-                                const today = formatDateLocal(new Date())
                                 const override = weeklyOverrides.find(
-                                  (o) => String(o.employeeId) === String(employee.id) && o.date === today
+                                  (o) => String(o.employeeId) === String(employee.id) && o.date === todayISO
                                 )
                                 
                                 return (
@@ -1328,10 +1386,44 @@ export default function SchedulingPage() {
                       
                       const assignments = schedule.branchAssignments || []
                       const totalCrew = assignments.reduce((sum: number, ba: any) => sum + (ba.employees?.length || 0), 0)
-                      const absentCount = weeklyOverrides.filter((o: any) => o.date === dateISO).length
+                      // Use actual attendance records if available, fall back to override logic
+                      const dayAttendance = weekAttendance[dateISO]
+                      const dateOverrides = weeklyOverrides.filter((o: any) => o.date === dateISO)
+                      const uniqueAbsentIds = new Set<string>()
+                      // Count absences: check attendance records first, then overrides
+                      if (dayAttendance && Object.keys(dayAttendance).length > 0) {
+                        // We have attendance data for this day — count those NOT present
+                        assignments.forEach((ba: any) => {
+                          (ba.employees || []).forEach((emp: any) => {
+                            const status = dayAttendance[String(emp.employeeId)]
+                            if (status && status !== "present") {
+                              uniqueAbsentIds.add(String(emp.employeeId))
+                            } else if (!status) {
+                              // No attendance record — check overrides
+                              const hasOverride = dateOverrides.find((o: any) => String(o.employeeId) === String(emp.employeeId))
+                              if (hasOverride) uniqueAbsentIds.add(String(emp.employeeId))
+                            }
+                          })
+                        })
+                      } else {
+                        // No attendance data — use overrides only (future days)
+                        dateOverrides.forEach((o: any) => uniqueAbsentIds.add(String(o.employeeId)))
+                      }
+                      const absentCount = uniqueAbsentIds.size
+                      // Count present employees for the header
+                      const presentIds = new Set<string>()
+                      if (dayAttendance && Object.keys(dayAttendance).length > 0) {
+                        assignments.forEach((ba: any) => {
+                          (ba.employees || []).forEach((emp: any) => {
+                            if (dayAttendance[String(emp.employeeId)] === "present") presentIds.add(String(emp.employeeId))
+                          })
+                        })
+                      }
+                      const presentCount = presentIds.size
+                      const isToday = dateISO === formatDateLocal(new Date())
                       
                       details.push(
-                        <div key={i} className="border rounded-lg">
+                        <div key={i} className={`border rounded-lg ${isToday ? 'ring-2 ring-blue-400 bg-blue-50/30' : ''}`}>
                           <button
                             onClick={() => {
                               const newExpanded = new Set(expandedDays)
@@ -1345,8 +1437,8 @@ export default function SchedulingPage() {
                             className="w-full flex items-center justify-between gap-2 p-3 hover:bg-muted/50 transition-colors"
                           >
                             <div className="flex items-center gap-2 flex-1 text-left">
-                              <div className="text-sm font-medium">{dayName}, {dateStr}</div>
-                              <div className="text-xs text-muted-foreground">({totalCrew} crew{absentCount > 0 ? `, ${absentCount} absent` : ""})</div>
+                              <div className="text-sm font-medium">{dayName}, {dateStr} {isToday ? '(Today)' : ''}</div>
+                              <div className="text-xs text-muted-foreground">({totalCrew} crew{presentCount > 0 ? `, ${presentCount} present` : ''}{absentCount > 0 ? `, ${absentCount} absent` : ""})</div>
                             </div>
                             <div className="text-xs text-muted-foreground">{isExpanded ? "▼" : "▶"}</div>
                           </button>
@@ -1361,7 +1453,39 @@ export default function SchedulingPage() {
                                       const override = weeklyOverrides.find(
                                         (o: any) => String(o.employeeId) === String(employee.employeeId) && o.date === dateISO
                                       )
-                                      const status = override ? "Absent" : "Present"
+                                      const dayAtt = weekAttendance[dateISO]
+                                      const attStatus = dayAtt?.[String(employee.employeeId)]
+                                      
+                                      // Determine display status: attendance record takes priority over overrides
+                                      let status: string
+                                      let statusColor: string
+                                      if (attStatus === "present") {
+                                        status = "Present"
+                                        statusColor = "text-green-600"
+                                      } else if (attStatus === "absent") {
+                                        status = "Absent"
+                                        statusColor = "text-red-600"
+                                      } else if (override) {
+                                        status = "Absent"
+                                        statusColor = "text-amber-600"
+                                      } else {
+                                        // No attendance record and no override
+                                        const dateObj = new Date(dateISO + "T00:00:00")
+                                        const todayObj = new Date()
+                                        todayObj.setHours(0,0,0,0)
+                                        if (dateObj < todayObj) {
+                                          // Past day — no clock-in record
+                                          status = "No Record"
+                                          statusColor = "text-gray-500"
+                                        } else if (dateObj.getTime() === todayObj.getTime() && dayAtt && Object.keys(dayAtt).length > 0) {
+                                          // Today and we have some attendance data but this employee didn't clock in
+                                          status = "Not Clocked In"
+                                          statusColor = "text-amber-600"
+                                        } else {
+                                          status = "Scheduled"
+                                          statusColor = "text-blue-600"
+                                        }
+                                      }
                                       const displayBranch = override ? override.overrideBranchName : branchAssignment.branchName
                                       
                                       return (
@@ -1371,7 +1495,7 @@ export default function SchedulingPage() {
                                             <div className="text-muted-foreground">{employee.shift || "AM"} Shift</div>
                                           </div>
                                           <div className="text-right">
-                                            <div className={`font-medium ${override ? "text-amber-600" : "text-green-600"}`}>
+                                            <div className={`font-medium ${statusColor}`}>
                                               {status}
                                             </div>
                                             {displayBranch && <div className="text-muted-foreground text-xs">{displayBranch}</div>}
@@ -1402,7 +1526,7 @@ export default function SchedulingPage() {
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Calendar className="h-4 w-4" />
-                Next Week's Rotation ({getNextWeekDates()})
+                Next Week's Rotation ({nextWeekDates})
               </CardTitle>
               <p className="text-xs text-muted-foreground">
                 Preview of the predicted rotation for next week — updates automatically when the week changes
@@ -1478,7 +1602,7 @@ export default function SchedulingPage() {
           <Dialog open={showRotationPreview} onOpenChange={setShowRotationPreview}>
             <DialogContent className="max-w-6xl max-h-[80vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Next Week's Rotation Preview ({getNextWeekDates()})</DialogTitle>
+                <DialogTitle>Next Week's Rotation Preview ({nextWeekDates})</DialogTitle>
                 <p className="text-sm text-muted-foreground">
                   Review crew assignments by branch and make manual adjustments before applying the rotation
                 </p>
@@ -1655,9 +1779,7 @@ export default function SchedulingPage() {
                 <Button
                   disabled={branchesList.length === 0 || !hasAnyEmployees}
                   onClick={async () => {
-                    console.log("[Apply Rotation Button] Clicked - Starting handler...")
                     if (branchesList.length === 0 || !hasAnyEmployees) {
-                      console.log("[Apply Rotation Button] Validation failed: branches or crews missing")
                       showNotification(
                         "error",
                         "Cannot Apply Rotation",
@@ -1669,13 +1791,10 @@ export default function SchedulingPage() {
                     }
 
                     if (!rotatedEmployees || rotatedEmployees.length === 0) {
-                      console.log("[Apply Rotation Button] No rotated employees available")
                       showNotification("info", "No Preview", "No rotation preview available. Click Regenerate to create a preview first.")
                       return
                     }
 
-                    console.log("[Apply Rotation Button] Validation passed. rotatedEmployees:", rotatedEmployees.length)
-                    
                     // Compute current week's Monday and Sunday for applying the preview rotation to current week
                     const today = new Date()
                     const currentDay = today.getDay()
@@ -1686,7 +1805,7 @@ export default function SchedulingPage() {
                     const currentSundayISO = (() => { const s = new Date(currentMonday); s.setDate(currentMonday.getDate() + 6); return formatDateLocal(s) })()
 
                     // Build assignments for current week's schedule
-                    const applyRotationAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string }> = []
+                    const applyRotationAssignments: Array<{ employeeId: string; employeeName: string; branchId: string; branchName?: string; shift?: string; shiftStart?: string; shiftEnd?: string; isManual?: boolean }> = []
 
                     for (const emp of rotatedEmployees) {
                       // Search in fireBranches first (same source the rotation algo used), then fall back to store branches
@@ -1702,79 +1821,86 @@ export default function SchedulingPage() {
                           branchId: String(targetBranch.id),
                           branchName,
                           shift: shiftType,
+                          isManual: !!emp.isManual,
                           ...getShiftTimes(shiftType),
                         })
-                        console.log("[Apply Rotation Button] Added assignment:", employeeName, "->", branchName)
-
                         // Also update current assignment so the applied preview becomes the current rotation
-                        assignCrewToBranch(emp.id, targetBranch.id)
+                        if (emp.storeCrewId) assignCrewToBranch(emp.storeCrewId, targetBranch.id)
                       } else {
                         console.warn("[Apply Rotation Button] No matching branch found for:", emp.nextWeekBranch)
                       }
                     }
-                    console.log("[Apply Rotation Button] Built assignments:", applyRotationAssignments.length)
-
                     // Save as 7 schedule documents for current week (one per day, Mon-Sun)
                     if (applyRotationAssignments.length > 0) {
-                      const startTime = "07:00" // Default AM time for applied rotations
-                      console.log("[Apply Rotation] Saving schedules to Firestore (assignments):", applyRotationAssignments.length)
-                      console.log("[Apply Rotation] Week:", currentMondayISO, "-", currentSundayISO)
+                      const startTime = "07:00"
                       try {
-                        // Delete any existing schedules for current week
+                        // Delete any existing non-manual schedules for current week
                         try {
-                          await deleteSchedulesForWeek(currentMondayISO)
+                          await deleteSchedulesForWeek(currentMondayISO, true)
                         } catch (err) {
-                          console.warn("[Apply Rotation] Could not delete existing schedules for current week:", err)
+                          console.warn("[Apply Rotation] Could not delete existing schedules:", err)
                         }
 
-                        // Save 7 schedule documents (one per day of the week)
-                        const savedDates: string[] = []
-                        console.log("[Apply Rotation] Starting to save 7 documents for week")
-                        
+                        // Batch-fetch remaining manual dates (1 call instead of 7)
+                        const manualDates = new Set<string>()
+                        try {
+                          const weekScheds = await getSchedulesForWeekFromFirestore(currentMondayISO)
+                          for (const s of weekScheds) {
+                            if (s.manuallyScheduled && s.scheduleFor) manualDates.add(s.scheduleFor)
+                          }
+                        } catch {}
+
+                        // Build assignment payload once
+                        const assignmentPayload = applyRotationAssignments.map((a) => ({
+                          employeeId: a.employeeId,
+                          employeeName: a.employeeName,
+                          branchId: a.branchId,
+                          branchName: a.branchName,
+                          isPresent: false,
+                          isManual: a.isManual || false,
+                          shift: a.shift,
+                          shiftStart: a.shiftStart,
+                          shiftEnd: a.shiftEnd,
+                        }))
+
+                        // Save in parallel, skip manually scheduled dates
+                        const savePromises: Promise<string | null>[] = []
                         for (let i = 0; i < 7; i++) {
                           const d = new Date(currentMonday)
                           d.setDate(currentMonday.getDate() + i)
                           const dayISO = formatDateLocal(d)
-                          console.log(`[Apply Rotation] Saving document ${i + 1}/7 for ${dayISO}`)
+                          if (manualDates.has(dayISO)) continue
 
-                          try {
-                            await addScheduleToFirestore({
+                          savePromises.push(
+                            addScheduleToFirestore({
                               date: currentMondayISO,
                               scheduleFor: dayISO,
                               time: startTime,
                               weekStart: currentMondayISO,
                               weekEnd: currentSundayISO,
-                              assignments: applyRotationAssignments.map((a) => ({
-                                employeeId: a.employeeId,
-                                employeeName: a.employeeName,
-                                branchId: a.branchId,
-                                branchName: a.branchName,
-                                isPresent: true,
-                                shift: a.shift,
-                                shiftStart: a.shiftStart,
-                                shiftEnd: a.shiftEnd,
-                              })),
-                            })
-                            savedDates.push(dayISO)
-                            console.log(`[Apply Rotation] Successfully saved document for ${dayISO}`)
-                          } catch (e) {
-                            console.error("[Apply Rotation] Failed to save schedule for", dayISO, e)
-                          }
+                              assignments: assignmentPayload,
+                            }).then(() => dayISO).catch(() => null)
+                          )
                         }
 
-                        console.log("[Apply Rotation] Total saved:", savedDates.length)
+                        const results = await Promise.all(savePromises)
+                        const savedDates = results.filter(Boolean) as string[]
+
                         if (savedDates.length > 0) {
-                          console.log("[Apply Rotation] Schedules saved successfully. Dates:", savedDates)
                           const branchNames = [...new Set(applyRotationAssignments.map(a => a.branchName))].join(", ")
                           showNotification("success", "Schedule Saved", `Applied rotation saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) for branches: ${branchNames}`)
+                          await sendScheduleNotifications(applyRotationAssignments, `${savedDates[0]} - ${savedDates[savedDates.length - 1]}`)
                         } else {
                           showNotification("error", "Save Error", "Failed to save rotation to Firestore")
                         }
                       } catch (err) {
-                        console.error("[Apply Rotation] Failed to save schedules to Firestore:", err)
+                        console.error("[Apply Rotation] Failed to save schedules:", err)
                         showNotification("error", "Save Error", "Failed to save rotation to Firestore")
                       }
                     }
+
+                    // Refresh employee data so the UI reflects updated branches
+                    await fetchFireData()
 
                     // Clear preview/manual overrides after applying so Preview is reset
                     setRotatedEmployees([])
@@ -1791,6 +1917,31 @@ export default function SchedulingPage() {
                   }}
                 >
                   Apply Rotation
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Yes/No Confirmation Dialog for Generate New Rotation */}
+          <Dialog open={showRegenerateConfirm} onOpenChange={setShowRegenerateConfirm}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Generate New Rotation?</DialogTitle>
+                <p className="text-sm text-muted-foreground mt-2">
+                  This will generate a new crew rotation for the current week. Manually scheduled days will be preserved.
+                  {Object.keys(manualAssignments).length > 0 && (
+                    <span className="block mt-1 text-amber-600">
+                      {Object.keys(manualAssignments).length} manual assignment(s) will be respected in the rotation.
+                    </span>
+                  )}
+                </p>
+              </DialogHeader>
+              <div className="flex justify-end gap-2 pt-4">
+                <Button variant="outline" onClick={() => setShowRegenerateConfirm(false)}>
+                  No, Cancel
+                </Button>
+                <Button onClick={confirmRegenerate}>
+                  Yes, Generate
                 </Button>
               </div>
             </DialogContent>

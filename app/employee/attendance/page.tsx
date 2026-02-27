@@ -35,6 +35,7 @@ export default function EmployeeAttendancePage() {
   const [locationDistance, setLocationDistance] = useState<number | null>(null)
   const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number; accuracy: number } | null>(null)
   const [branchInfo, setBranchInfo] = useState<any | null>(null)
+  const [validatedBranch, setValidatedBranch] = useState<{ branchId: string; branchName: string } | null>(null)
 
   useEffect(() => {
     const user = sessionStorage.getItem("currentUser")
@@ -45,7 +46,58 @@ export default function EmployeeAttendancePage() {
       setCurrentUser(userData)
 
       if (userData.id) {
-        fetchAttendanceData(userData)
+        // Fetch fresh employee data from DB, then override with today's schedule branch
+        fetch(`/api/employees?id=${userData.id}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then(async (freshData) => {
+            let workingUser = userData
+            if (freshData && freshData.branchId !== undefined) {
+              workingUser = { ...userData, branchId: freshData.branchId }
+              setCurrentUser(workingUser)
+              sessionStorage.setItem("currentUser", JSON.stringify(workingUser))
+            }
+
+            // Fetch today's schedule to get the rotation-based branch assignment
+            try {
+              const today = new Date().toISOString().split("T")[0]
+              const schedRes = await fetch(`/api/schedules?scheduleFor=${today}`)
+              if (schedRes.ok) {
+                const schedules = await schedRes.json()
+                if (Array.isArray(schedules) && schedules.length > 0) {
+                  const sorted = schedules.sort((a: any, b: any) =>
+                    new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+                  )
+                  for (const sched of sorted) {
+                    let assignments = sched.branchAssignments
+                    if (typeof assignments === "string") {
+                      try { assignments = JSON.parse(assignments) } catch { assignments = null }
+                    }
+                    if (Array.isArray(assignments)) {
+                      for (const branch of assignments) {
+                        const emp = branch.employees?.find(
+                          (e: any) => String(e.employeeId) === String(workingUser.id)
+                        )
+                        if (emp && branch.branchId) {
+                          // Use schedule branch as the effective branch
+                          workingUser = { ...workingUser, branchId: branch.branchId }
+                          setCurrentUser(workingUser)
+                          sessionStorage.setItem("currentUser", JSON.stringify(workingUser))
+                          break
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("Error fetching schedule for branch:", err)
+            }
+
+            fetchAttendanceData(workingUser)
+          })
+          .catch(() => {
+            fetchAttendanceData(userData)
+          })
       }
     } catch (error) {
       console.error("Error loading attendance data:", error)
@@ -135,6 +187,8 @@ export default function EmployeeAttendancePage() {
       if (data.valid) {
         setLocationStatus("valid")
         setLocationMessage(`Location verified! You are ${data.distanceMeters}m from ${data.branchName}.`)
+        // Store the validated branch so clock-in/out uses the correct (schedule-based) branch
+        setValidatedBranch({ branchId: data.branchId, branchName: data.branchName })
         return true
       } else {
         setLocationStatus("rejected")
@@ -175,8 +229,8 @@ export default function EmployeeAttendancePage() {
           timeIn,
           latitude: currentLocation?.latitude || null,
           longitude: currentLocation?.longitude || null,
-          branchId: currentUser.branchId || null,
-          branchName: branchInfo?.branchName || null,
+          branchId: validatedBranch?.branchId || currentUser.branchId || null,
+          branchName: validatedBranch?.branchName || branchInfo?.branchName || null,
         }),
       })
 

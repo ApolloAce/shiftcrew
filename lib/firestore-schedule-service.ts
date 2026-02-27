@@ -5,6 +5,7 @@ export type BranchEmployee = {
   employeeId: string
   employeeName?: string
   isPresent: boolean
+  isManual?: boolean
   shift?: string
 }
 
@@ -58,9 +59,14 @@ export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | 
   return data.id
 }
 
-// Get all schedules for a specific date
+// Get all schedules for a specific date (queries by scheduleFor, the per-day column)
 export const getSchedulesForDate = async (date: string): Promise<Schedule[]> => {
-  return apiFetch(`${API}?date=${date}`)
+  return apiFetch(`${API}?scheduleFor=${date}`)
+}
+
+// Get all schedules for an entire week in a single API call
+export const getSchedulesForWeek = async (weekStart: string): Promise<Schedule[]> => {
+  return apiFetch(`${API}?weekStart=${weekStart}`)
 }
 
 // Update an existing schedule's assignments
@@ -72,7 +78,9 @@ export const updateScheduleAssignments = async (scheduleId: string, assignments:
   })
 }
 
-// Delete all schedules for a given week
-export const deleteSchedulesForWeek = async (weekStart: string): Promise<void> => {
-  await apiFetch(`${API}?weekStart=${weekStart}`, { method: "DELETE" })
+// Delete all schedules for a given week (optionally preserve manually scheduled ones)
+export const deleteSchedulesForWeek = async (weekStart: string, preserveManual?: boolean): Promise<void> => {
+  const params = new URLSearchParams({ weekStart })
+  if (preserveManual) params.set("preserveManual", "true")
+  await apiFetch(`${API}?${params.toString()}`, { method: "DELETE" })
 }

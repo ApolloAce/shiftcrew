@@ -16,8 +16,9 @@ export async function GET(req: Request) {
     const params: any[] = [];
 
     if (recipientId) {
-      // Return notifications for this recipient OR broadcast notifications (recipientId IS NULL)
-      conditions.push("(recipientId = ? OR recipientId IS NULL)");
+      // Return notifications targeted at this user only (not broadcasts)
+      // Admin-only broadcasts should not leak to employees
+      conditions.push("recipientId = ?");
       params.push(recipientId);
     }
     if (unreadOnly === "true") {

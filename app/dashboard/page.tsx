@@ -57,14 +57,43 @@ export default function DashboardPage() {
           d.setDate(monday.getDate() + i)
           weekDates.push(d.toISOString().split("T")[0])
         }
-        // Fetch all schedules for the week in parallel
-        const weekScheduleResults = await Promise.all(
-          weekDates.map(dateISO => getSchedulesForDate(dateISO))
-        )
+        // Fetch all schedules for the week AND today's attendance records in parallel
+        const [weekScheduleResults, attendanceRes] = await Promise.all([
+          Promise.all(weekDates.map(dateISO => getSchedulesForDate(dateISO))),
+          fetch(`/api/attendance?date=${todayISO}`).then(r => r.ok ? r.json() : []),
+        ])
         const allSchedules = weekScheduleResults.flat()
         // Only show today's schedule, never fallback to previous days
         const todaySchedule = pickTodaySchedule(allSchedules, todayISO)
         if (todaySchedule) {
+          // Merge actual attendance data: override isPresent based on daily_attendance records
+          const attendanceLookup = new Map<string, string>()
+          if (Array.isArray(attendanceRes)) {
+            for (const rec of attendanceRes) {
+              attendanceLookup.set(String(rec.employeeId), rec.status)
+            }
+          }
+          if (todaySchedule.branchAssignments) {
+            todaySchedule.branchAssignments = todaySchedule.branchAssignments.map((branch: any) => ({
+              ...branch,
+              employees: branch.employees.map((emp: any) => {
+                const attendanceStatus = attendanceLookup.get(String(emp.employeeId))
+                return {
+                  ...emp,
+                  isPresent: attendanceStatus === "present",
+                }
+              }),
+            }))
+          }
+          if (todaySchedule.assignments) {
+            todaySchedule.assignments = todaySchedule.assignments.map((emp: any) => {
+              const attendanceStatus = attendanceLookup.get(String(emp.employeeId))
+              return {
+                ...emp,
+                isPresent: attendanceStatus === "present",
+              }
+            })
+          }
           setScheduleData(todaySchedule)
         } else {
           setScheduleData(null)
@@ -165,10 +194,29 @@ export default function DashboardPage() {
         branchName,
       })
 
-      // Fetch the updated schedule to ensure we get the latest state
-      const schedules = await getSchedulesForDate(scheduleData.date);
+      // Fetch the updated schedule AND attendance to merge actual status
+      const [schedules, attendanceRes] = await Promise.all([
+        getSchedulesForDate(scheduleData.date),
+        fetch(`/api/attendance?date=${todayISO}`).then(r => r.ok ? r.json() : []),
+      ]);
       const updated = schedules.find((s: any) => s.id === scheduleData.id);
       if (updated) {
+        // Merge attendance data into schedule
+        const attendanceLookup = new Map<string, string>()
+        if (Array.isArray(attendanceRes)) {
+          for (const rec of attendanceRes) {
+            attendanceLookup.set(String(rec.employeeId), rec.status)
+          }
+        }
+        if (updated.branchAssignments) {
+          updated.branchAssignments = updated.branchAssignments.map((branch: any) => ({
+            ...branch,
+            employees: branch.employees.map((e: any) => {
+              const attendanceStatus = attendanceLookup.get(String(e.employeeId))
+              return { ...e, isPresent: attendanceStatus === "present" }
+            }),
+          }))
+        }
         setScheduleData(updated);
       }
       showNotification("success", "Attendance Updated", "Attendance status updated successfully.");

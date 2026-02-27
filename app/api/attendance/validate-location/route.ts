@@ -52,50 +52,54 @@ export async function POST(req: Request) {
 
     const employee = employees[0];
 
-    let assignedBranchId = employee.branchId;
+    let assignedBranchId = null;
 
-    // If the employee has no static branchId, check today's schedule for their assignment
-    if (!assignedBranchId) {
-      const todayISO = new Date().toISOString().split("T")[0];
-      const schedules: any[] = await query(
-        "SELECT branchAssignments, assignments FROM schedules WHERE scheduleFor = ? OR date = ? ORDER BY updatedAt DESC",
-        [todayISO, todayISO]
-      );
+    // Check today's schedule FIRST — this is the authoritative source for where
+    // the employee should be today (admin may have rotated/manually assigned them).
+    const todayISO = new Date().toISOString().split("T")[0];
+    const schedules: any[] = await query(
+      "SELECT branchAssignments, assignments FROM schedules WHERE scheduleFor = ? OR date = ? ORDER BY updatedAt DESC",
+      [todayISO, todayISO]
+    );
 
-      for (const sched of schedules) {
-        // Check branchAssignments (structured format)
-        let branchAssignments = sched.branchAssignments;
-        if (typeof branchAssignments === "string") {
-          try { branchAssignments = JSON.parse(branchAssignments); } catch { branchAssignments = null; }
-        }
-        if (Array.isArray(branchAssignments)) {
-          for (const branch of branchAssignments) {
-            const found = branch.employees?.find(
-              (e: any) => String(e.employeeId) === String(employeeId)
-            );
-            if (found && branch.branchId) {
-              assignedBranchId = branch.branchId;
-              break;
-            }
-          }
-        }
-        if (assignedBranchId) break;
-
-        // Check flat assignments array (legacy format)
-        let assignments = sched.assignments;
-        if (typeof assignments === "string") {
-          try { assignments = JSON.parse(assignments); } catch { assignments = null; }
-        }
-        if (Array.isArray(assignments)) {
-          const found = assignments.find(
-            (a: any) => String(a.employeeId) === String(employeeId)
+    for (const sched of schedules) {
+      // Check branchAssignments (structured format)
+      let branchAssignments = sched.branchAssignments;
+      if (typeof branchAssignments === "string") {
+        try { branchAssignments = JSON.parse(branchAssignments); } catch { branchAssignments = null; }
+      }
+      if (Array.isArray(branchAssignments)) {
+        for (const branch of branchAssignments) {
+          const found = branch.employees?.find(
+            (e: any) => String(e.employeeId) === String(employeeId)
           );
-          if (found?.branchId) {
-            assignedBranchId = found.branchId;
+          if (found && branch.branchId) {
+            assignedBranchId = branch.branchId;
             break;
           }
         }
       }
+      if (assignedBranchId) break;
+
+      // Check flat assignments array (legacy format)
+      let assignments = sched.assignments;
+      if (typeof assignments === "string") {
+        try { assignments = JSON.parse(assignments); } catch { assignments = null; }
+      }
+      if (Array.isArray(assignments)) {
+        const found = assignments.find(
+          (a: any) => String(a.employeeId) === String(employeeId)
+        );
+        if (found?.branchId) {
+          assignedBranchId = found.branchId;
+          break;
+        }
+      }
+    }
+
+    // Fall back to the employee's static branchId from the users table
+    if (!assignedBranchId) {
+      assignedBranchId = employee.branchId;
     }
 
     if (!assignedBranchId) {
