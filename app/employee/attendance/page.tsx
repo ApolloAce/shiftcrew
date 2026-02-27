@@ -545,6 +545,11 @@ export default function EmployeeAttendancePage() {
             <CardContent>
               <div className="mb-6">
                 <h3 className="text-lg font-medium mb-2">{format(today, "MMMM yyyy")}</h3>
+                <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-gray-50 dark:bg-gray-900 border"></span> Weekend</span>
+                </div>
                 <div className="grid grid-cols-7 gap-2">
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
                     <div key={day} className="text-center font-medium text-sm p-2">
@@ -552,24 +557,46 @@ export default function EmployeeAttendancePage() {
                     </div>
                   ))}
 
+                  {/* Spacer cells to align the first day under the correct column */}
+                  {(() => {
+                    const firstDay = daysInMonth[0].getDay() // 0=Sun
+                    const offset = firstDay === 0 ? 6 : firstDay - 1 // Mon=0, Tue=1, ...
+                    return Array.from({ length: offset }, (_, i) => <div key={`spacer-${i}`} />)
+                  })()}
+
                   {daysInMonth.map((day, i) => {
                     const attendance = getAttendanceForDay(day)
+                    const isPast = day < today && !isSameDay(day, today)
+                    const dayOfWeek = day.getDay() // 0=Sun, 6=Sat
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
+                    const isFuture = day > today && !isSameDay(day, today)
                     let bgColor = "bg-gray-100 dark:bg-gray-800"
+                    let indicator = ""
 
                     if (attendance) {
-                      bgColor = attendance.status === "present"
-                        ? "bg-green-100 dark:bg-green-900/30"
-                        : "bg-yellow-100 dark:bg-yellow-900/30"
+                      if (attendance.status === "present") {
+                        bgColor = "bg-green-100 dark:bg-green-900/30"
+                        indicator = "✓"
+                      } else {
+                        bgColor = "bg-red-100 dark:bg-red-900/30"
+                        indicator = "✗"
+                      }
+                    } else if (isPast && !isWeekend) {
+                      // Past weekday with no attendance record = Absent
+                      bgColor = "bg-red-50 dark:bg-red-900/20"
+                      indicator = "✗"
+                    } else if (isWeekend) {
+                      bgColor = "bg-gray-50 dark:bg-gray-900"
                     }
 
                     if (isSameDay(day, today)) {
-                      bgColor += " border-2 border-primary"
+                      bgColor += " ring-2 ring-primary"
                     }
 
                     return (
-                      <div key={i} className={`text-center p-2 rounded-md ${bgColor}`}>
+                      <div key={i} className={`text-center p-2 rounded-md ${bgColor} ${isFuture ? 'opacity-50' : ''}`}>
                         <div className="text-sm">{format(day, "d")}</div>
-                        {attendance && <div className="text-xs mt-1">{attendance.status === "present" ? "✓" : "✗"}</div>}
+                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : "text-red-500"}`}>{indicator}</div>}
                       </div>
                     )
                   })}
