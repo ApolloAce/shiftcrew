@@ -62,6 +62,25 @@ async function sendScheduleNotifications(
 }
 
 // Scheduling now uses live store data. No local sampleEmployees are present so the app starts empty.
+
+// Sync employee branchId in the users table so Dashboard/validate-location reflect the schedule
+async function syncEmployeeBranches(
+  assignments: Array<{ employeeId: string; branchId: string }>
+) {
+  const seen = new Set<string>()
+  const updates: Promise<void>[] = []
+  for (const a of assignments) {
+    if (seen.has(a.employeeId)) continue
+    seen.add(a.employeeId)
+    updates.push(
+      updateEmployee(a.employeeId, { branchId: a.branchId }).catch((err) =>
+        console.warn(`[syncEmployeeBranches] Failed for ${a.employeeId}:`, err)
+      )
+    )
+  }
+  await Promise.allSettled(updates)
+}
+
 // Branches are loaded from the live crew store (managed in Branch Management). We derive a
 // lightweight `branchesList` from the store inside the component so the UI and rotation
 // algorithm always reflect the actual branches configured by the admin.
@@ -124,36 +143,46 @@ export default function SchedulingPage() {
   }, [fireBranches])
   
   const [manualAssignments, setManualAssignments] = useState<Record<string, string>>({})
+  const [appliedRotation, setAppliedRotation] = useState<any[]>([])
 
-  // Helper function to get Firestore employees for a specific branch — uses lookup maps
+  // Helper function to get employees for a specific branch — uses schedule, manual assignments, and DB
   const getFirestoreEmployeesForBranch = useCallback((branchId: string | number) => {
     const branch = fireBranchMap.get(String(branchId))
     const branchName = branch?.branchName
+    if (!branchName) return []
 
-    // Get employees with branchId matching (from Firestore)
-    // Exclude employees that have been manually overridden to a DIFFERENT branch
-    const firestoreMatches = fireEmployees.filter((emp: any) => {
-      const manualBranch = manualAssignments[String(emp.id)]
-      if (manualBranch && manualBranch !== branchName) return false
-      return String(emp.branchId) === String(branchId)
-    })
+    // Build a map of employee → assigned branch from appliedRotation (schedule source of truth)
+    const scheduleBranchMap = new Map<string, string>()
+    for (const emp of appliedRotation) {
+      if (emp.nextWeekBranch) scheduleBranchMap.set(String(emp.id), emp.nextWeekBranch)
+    }
 
-    // Get manually assigned employees for this branch
-    const manuallyAssigned = fireEmployees.filter((emp: any) => {
-      const assignedBranchName = manualAssignments[String(emp.id)]
-      return assignedBranchName === branchName
-    })
+    // Priority: manualAssignments > appliedRotation > employee.branchId
+    const result: any[] = []
+    const addedIds = new Set<string>()
 
-    // Combine and deduplicate by employee ID
-    const combined = [...firestoreMatches]
-    for (const emp of manuallyAssigned) {
-      if (!combined.find((e) => String(e.id) === String(emp.id))) {
-        combined.push(emp)
+    for (const emp of fireEmployees) {
+      const empId = String(emp.id)
+      const manualBranch = manualAssignments[empId]
+      const scheduleBranch = scheduleBranchMap.get(empId)
+
+      let effectiveBranch: string | undefined
+      if (manualBranch) {
+        effectiveBranch = manualBranch
+      } else if (scheduleBranch) {
+        effectiveBranch = scheduleBranch
+      } else if (emp.branchId && String(emp.branchId) === String(branchId)) {
+        effectiveBranch = branchName
+      }
+
+      if (effectiveBranch === branchName && !addedIds.has(empId)) {
+        result.push(emp)
+        addedIds.add(empId)
       }
     }
 
-    return combined
-  }, [fireBranchMap, fireEmployees, manualAssignments])
+    return result
+  }, [fireBranchMap, fireEmployees, manualAssignments, appliedRotation])
   
   const [selectedDate, setSelectedDate] = useState(() => {
     // Initialize to Monday of current week
@@ -166,7 +195,6 @@ export default function SchedulingPage() {
   const [appliedScheduleWeek, setAppliedScheduleWeek] = useState<{ weekStart?: string; weekEnd?: string } | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedBranchForDisplay, setSelectedBranchForDisplay] = useState<string | null>(null)
-  const [appliedRotation, setAppliedRotation] = useState<any[]>([])
   const [nextWeekRotationPreview, setNextWeekRotationPreview] = useState<any[]>([])
 
   const [showRotationPreview, setShowRotationPreview] = useState(false)
@@ -227,10 +255,18 @@ export default function SchedulingPage() {
     }
 
     // Manual assignments count per branch (keys are string IDs)
-    const manualAssignedIds = Object.keys(manualAssignments).map((k) => String(k))
+    // Merge manual flags from appliedRotation (persisted schedule) into manualAssignments
+    // so that isManual employees are properly excluded even after "Apply Rotation" clears the state
+    const effectiveManual: Record<string, string> = { ...manualAssignments }
+    for (const emp of appliedRotation) {
+      if (emp.isManual && emp.nextWeekBranch && !effectiveManual[String(emp.id)]) {
+        effectiveManual[String(emp.id)] = emp.nextWeekBranch
+      }
+    }
+    const manualAssignedIds = Object.keys(effectiveManual).map((k) => String(k))
     const manualCount: Record<string, number> = {}
-    for (const idStr of Object.keys(manualAssignments)) {
-      const bn = manualAssignments[idStr]
+    for (const idStr of Object.keys(effectiveManual)) {
+      const bn = effectiveManual[idStr]
       if (!bn) continue
       manualCount[bn] = (manualCount[bn] || 0) + 1
     }
@@ -293,11 +329,11 @@ export default function SchedulingPage() {
 
     const assignedResults: Array<any> = []
 
-    // First, apply manual assignments (always honor)
-    for (const idStr of Object.keys(manualAssignments)) {
+    // First, apply manual assignments (always honor — uses effectiveManual which includes persisted isManual)
+    for (const idStr of Object.keys(effectiveManual)) {
       const id = idStr
       const emp = lightweight.find((e) => String(e.id) === String(id))
-      const branchName = manualAssignments[idStr]
+      const branchName = effectiveManual[idStr]
       if (emp && branchName) {
         assignedResults.push({ ...emp, nextWeekBranch: branchName, nextWeekShift: emp.shift || "AM", isManual: true })
         // reduce desired immediately
@@ -418,44 +454,64 @@ export default function SchedulingPage() {
       monday.setDate(todayDate.getDate() - day + (day === 0 ? -6 : 1))
       const mondayISO = formatDateLocal(monday)
 
-      // Single API call instead of 7 sequential per-day calls
       const foundSchedules = await getSchedulesForWeekFromFirestore(mondayISO)
 
       if (foundSchedules && foundSchedules.length > 0) {
-        // pick the most recently updated/created schedule among all found
-        const latestSchedule = [...foundSchedules].sort((a: any, b: any) => {
-          const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime()
-          const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime()
-          return dateB - dateA
-        })[0]
+        // Group schedules by date, keeping the latest per date
+        const byDate: Record<string, any> = {}
+        for (const sched of foundSchedules) {
+          const dateKey = sched.scheduleFor || sched.date
+          if (!dateKey) continue
+          const existing = byDate[dateKey]
+          if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
+            byDate[dateKey] = sched
+          }
+        }
 
-        if (latestSchedule.branchAssignments && latestSchedule.branchAssignments.length > 0) {
-          const rotationData: any[] = []
-          const restoredManual: Record<string, string> = {}
-          for (const branchAssignment of latestSchedule.branchAssignments) {
+        // Merge all per-date schedules into a unified rotation view.
+        // Manual entries always override rotation entries for the same employee.
+        const employeeMap: Record<string, any> = {}
+        const restoredManual: Record<string, string> = {}
+        let latestDate: string | null = null
+
+        for (const [dateKey, sched] of Object.entries(byDate) as [string, any][]) {
+          if (!sched.branchAssignments || sched.branchAssignments.length === 0) continue
+          if (!latestDate || dateKey > latestDate) latestDate = dateKey
+
+          for (const branchAssignment of sched.branchAssignments) {
             for (const employee of branchAssignment.employees) {
-              rotationData.push({
+              const empId = String(employee.employeeId)
+              const isManual = employee.isManual || false
+              const entry = {
                 id: employee.employeeId,
                 firstName: employee.employeeName ? employee.employeeName.split(" ")[0] : "Unknown",
                 surname: employee.employeeName ? employee.employeeName.split(" ").slice(1).join(" ") : "",
                 nextWeekBranch: branchAssignment.branchName,
                 nextWeekShift: employee.shift || "AM",
-                isManual: employee.isManual || false,
-              })
-              // Restore persisted manual assignments so they survive page reload
-              if (employee.isManual) {
-                restoredManual[String(employee.employeeId)] = branchAssignment.branchName
+                isManual,
+              }
+              // Manual entries always win over rotation entries
+              if (isManual || !employeeMap[empId]) {
+                employeeMap[empId] = entry
+              }
+              // Collect ALL isManual flags from every schedule doc
+              if (isManual) {
+                restoredManual[empId] = branchAssignment.branchName
               }
             }
           }
+        }
+
+        const rotationData = Object.values(employeeMap)
+        if (rotationData.length > 0) {
           setAppliedRotation(rotationData)
-          // Restore manual assignments from persisted data
           if (Object.keys(restoredManual).length > 0) {
             setManualAssignments((prev) => ({ ...prev, ...restoredManual }))
           }
-          const scheduleDate = latestSchedule.scheduleFor || latestSchedule.date
-          const weekBounds = getWeekBoundsFromDate(scheduleDate)
-          setAppliedScheduleWeek(weekBounds)
+          if (latestDate) {
+            const weekBounds = getWeekBoundsFromDate(latestDate)
+            setAppliedScheduleWeek(weekBounds)
+          }
         }
       }
     } catch (err) {
@@ -677,6 +733,9 @@ export default function SchedulingPage() {
             showNotification("success", "Schedule Saved", `Regenerated schedule saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) for branches: ${branchNames}`)
             await sendScheduleNotifications(regeneratedAssignments, `${savedDates[0]} - ${savedDates[savedDates.length - 1]}`)
 
+            // Sync employee branchId in users table so Dashboard reflects the new branch
+            await syncEmployeeBranches(regeneratedAssignments)
+
             // Refresh employee data so the UI reflects updated branches
             await fetchFireData()
           } else {
@@ -732,15 +791,26 @@ export default function SchedulingPage() {
 
   const handleManualAssignment = (employeeId: string | number, branchName: string) => {
     const key = String(employeeId)
-    // Update manual assignments immediately so branch cards reflect the change
-    setManualAssignments((prev) => ({
-      ...prev,
-      [key]: branchName,
-    }))
-    setPendingAssignments((prev) => ({
-      ...prev,
-      [key]: branchName,
-    }))
+    // Replace semantics: assigning Employee X to Branch B clears any OTHER employee's
+    // manual assignment to Branch B (single-slot-per-branch for manual overrides).
+    setManualAssignments((prev) => {
+      const updated: Record<string, string> = {}
+      for (const [empId, branch] of Object.entries(prev)) {
+        if (branch === branchName && empId !== key) continue // evict previous occupant
+        updated[empId] = branch
+      }
+      updated[key] = branchName
+      return updated
+    })
+    setPendingAssignments((prev) => {
+      const updated: Record<string, string> = {}
+      for (const [empId, branch] of Object.entries(prev)) {
+        if (branch === branchName && empId !== key) continue
+        updated[empId] = branch
+      }
+      updated[key] = branchName
+      return updated
+    })
     setRotatedEmployees((prev) =>
       prev.map((emp) => (String(emp.id) === key ? { ...emp, nextWeekBranch: branchName } : emp)),
     )
@@ -771,14 +841,19 @@ export default function SchedulingPage() {
           `${employee.firstName} ${employee.surname} has been unassigned.`,
         )
       } else {
-        // Save manual assignment locally first (offline experience)
+        // Save manual assignment locally — replace semantics: clear previous manual occupant of this branch
         const branchName = branch ? branch.branchName : null
-        if (branchName) {
-          setManualAssignments((prev) => ({ ...prev, [String(employee.id)]: branchName }))
-        } else {
-          // Fallback: use branchId string if branch name unavailable
-          setManualAssignments((prev) => ({ ...prev, [String(employee.id)]: String(branchId) }))
-        }
+        const targetName = branchName || String(branchId)
+        const empKey = String(employee.id)
+        setManualAssignments((prev) => {
+          const updated: Record<string, string> = {}
+          for (const [id, bname] of Object.entries(prev)) {
+            if (bname === targetName && id !== empKey) continue // evict previous occupant
+            updated[id] = bname
+          }
+          updated[empKey] = targetName
+          return updated
+        })
 
         // Persist branchId to MySQL so attendance validation works
         try {
@@ -975,6 +1050,9 @@ export default function SchedulingPage() {
           showNotification("success", "Schedule Saved", `Manual schedule saved for ${selectedDate} with ${allAssignments.length} crew members across: ${branchNames}`)
           // Send notifications to employees about their new assignments
           await sendScheduleNotifications(allAssignments, selectedDate)
+
+          // Sync employee branchId in users table so Dashboard reflects the correct branch
+          await syncEmployeeBranches(allAssignments)
 
           // Refresh employee data so the UI reflects updated branches
           await fetchFireData()
@@ -1890,6 +1968,9 @@ export default function SchedulingPage() {
                           const branchNames = [...new Set(applyRotationAssignments.map(a => a.branchName))].join(", ")
                           showNotification("success", "Schedule Saved", `Applied rotation saved for ${savedDates.length} days (${savedDates[0]} - ${savedDates[savedDates.length - 1]}) for branches: ${branchNames}`)
                           await sendScheduleNotifications(applyRotationAssignments, `${savedDates[0]} - ${savedDates[savedDates.length - 1]}`)
+
+                          // Sync employee branchId in users table so Dashboard reflects the new branch
+                          await syncEmployeeBranches(applyRotationAssignments)
                         } else {
                           showNotification("error", "Save Error", "Failed to save rotation to Firestore")
                         }
@@ -1969,7 +2050,19 @@ export default function SchedulingPage() {
                   <Button
                     size="sm"
                     onClick={() => {
-                      setManualAssignments((prev) => ({ ...prev, ...pendingAssignments }))
+                      setManualAssignments((prev) => {
+                        const updated = { ...prev }
+                        // For each pending assignment, evict any other employee occupying that branch
+                        for (const [newEmpId, newBranch] of Object.entries(pendingAssignments)) {
+                          for (const [existingId, existingBranch] of Object.entries(updated)) {
+                            if (existingBranch === newBranch && existingId !== newEmpId) {
+                              delete updated[existingId]
+                            }
+                          }
+                          updated[newEmpId] = newBranch
+                        }
+                        return updated
+                      })
                       setPendingAssignments({})
                       showNotification("success", "Selections Saved", "Pending selections have been confirmed and will show on branch cards.")
                     }}
