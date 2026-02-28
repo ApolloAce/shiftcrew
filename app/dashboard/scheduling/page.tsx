@@ -477,6 +477,7 @@ export default function SchedulingPage() {
         for (const [dateKey, sched] of Object.entries(byDate) as [string, any][]) {
           if (!sched.branchAssignments || sched.branchAssignments.length === 0) continue
           if (!latestDate || dateKey > latestDate) latestDate = dateKey
+          const isManualDoc = !!sched.manuallyScheduled // only true for single-day manual saves
 
           for (const branchAssignment of sched.branchAssignments) {
             for (const employee of branchAssignment.employees) {
@@ -494,8 +495,9 @@ export default function SchedulingPage() {
               if (isManual || !employeeMap[empId]) {
                 employeeMap[empId] = entry
               }
-              // Collect ALL isManual flags from every schedule doc
-              if (isManual) {
+              // Only restore manual assignments from actual manual-save docs,
+              // not from rotation docs that inherited stale isManual flags.
+              if (isManual && isManualDoc) {
                 restoredManual[empId] = branchAssignment.branchName
               }
             }
@@ -505,8 +507,9 @@ export default function SchedulingPage() {
         const rotationData = Object.values(employeeMap)
         if (rotationData.length > 0) {
           setAppliedRotation(rotationData)
+          // Replace (not merge) — only the manual assignments from explicitly saved manual docs
           if (Object.keys(restoredManual).length > 0) {
-            setManualAssignments((prev) => ({ ...prev, ...restoredManual }))
+            setManualAssignments(restoredManual)
           }
           if (latestDate) {
             const weekBounds = getWeekBoundsFromDate(latestDate)
