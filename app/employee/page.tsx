@@ -461,7 +461,11 @@ export default function EmployeeDashboard() {
               )}
 
               <div className="pt-2">
-                {!latestTimeRecord || latestTimeRecord.status !== "present" ? (
+                {!todaySchedule && !assignedBranch ? (
+                  <div className="text-center text-sm text-muted-foreground">
+                    No schedule assigned — clock-in unavailable
+                  </div>
+                ) : !latestTimeRecord || latestTimeRecord.status !== "present" ? (
                   <Button className="w-full" onClick={handleClockInAttempt} disabled={isLoading}>
                     <Navigation className="mr-2 h-4 w-4" />
                     Clock In
