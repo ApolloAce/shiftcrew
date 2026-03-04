@@ -1340,12 +1340,6 @@ export default function SchedulingPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {appliedScheduleWeek && (
-            <Badge variant="outline" className="text-sm py-1.5 px-3 border-green-300 text-green-700 dark:text-green-400 bg-green-50/50 dark:bg-green-950/20">
-              <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
-              Schedule Saved
-            </Badge>
-          )}
           {manualCount > 0 && (
             <Button
               variant="outline"
