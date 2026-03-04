@@ -12,6 +12,10 @@ files = [
     "app/employee/page.tsx",
     "app/api/attendance/validate-location/route.ts",
     "lib/utils.ts",
+    "app/layout.tsx",
+    "app/page.tsx",
+    "app/dashboard/layout.tsx",
+    "app/employee/layout.tsx",
 ]
 
 step = sys.argv[1] if len(sys.argv) > 1 else "upload"

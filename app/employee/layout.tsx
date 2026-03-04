@@ -116,7 +116,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
           <SheetContent side="left" className="w-64 p-4 bg-primary text-primary-foreground">
             <div className="flex flex-col h-full">
               <div className="py-4 border-b border-primary-600 mb-4">
-                <h1 className="text-2xl font-bold">ShiftMate</h1>
+                <h1 className="text-2xl font-bold">ShiftCrew</h1>
                 <p className="text-sm text-primary-foreground/80">Employee Portal</p>
               </div>
               <NavLinks />
@@ -142,7 +142,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
       ) : (
         <aside className="fixed inset-y-0 left-0 w-64 border-r border-primary-200 bg-primary p-4 flex flex-col">
           <div className="py-4 border-b border-primary-600 mb-4">
-            <h1 className="text-2xl font-bold text-primary-foreground">ShiftMate</h1>
+            <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
             <p className="text-sm text-primary-foreground/80">Employee Portal</p>
           </div>
           <NavLinks />

@@ -94,7 +94,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-secondary-50 to-secondary-200 p-4">
       <Card className="w-full max-w-md shadow-xl transition-transform duration-300 hover:-translate-y-1 border-primary-200">
         <CardHeader className="text-center space-y-1 bg-primary text-primary-foreground rounded-t-lg">
-          <CardTitle className="text-4xl font-bold">ShiftMate</CardTitle>
+          <CardTitle className="text-4xl font-bold">ShiftCrew</CardTitle>
           <CardDescription className="text-lg text-primary-foreground/90">Crew Management System</CardDescription>
         </CardHeader>
 

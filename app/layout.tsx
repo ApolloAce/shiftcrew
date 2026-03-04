@@ -7,7 +7,7 @@ import { useCrewStore } from "@/lib/cleanStore"
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata = {
-  title: "ShiftMate - Crew Management System",
+  title: "ShiftCrew - Crew Management System",
   description: "Manage your crew members efficiently",
     generator: 'v0.app'
 }

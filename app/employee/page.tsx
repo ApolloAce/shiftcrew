@@ -31,6 +31,9 @@ export default function EmployeeDashboard() {
   // Location-based clock-in/out modal state
   const [showClockInModal, setShowClockInModal] = useState(false)
   const [showClockOutModal, setShowClockOutModal] = useState(false)
+
+  // Time-based attendance rules: auto-hide clock-in after shift end, mark absent
+  const [shiftExpired, setShiftExpired] = useState(false)
   const [locationStatus, setLocationStatus] = useState<"idle" | "checking" | "valid" | "rejected" | "error">("idle")
   const [locationMessage, setLocationMessage] = useState("")
   const [locationDistance, setLocationDistance] = useState<number | null>(null)
@@ -142,6 +145,24 @@ export default function EmployeeDashboard() {
       console.error("Error loading employee data:", error)
     }
   }, [])
+
+  // --- Shift time enforcement: check if current time is past shift end ---
+  useEffect(() => {
+    const checkShiftExpiry = () => {
+      if (!todaySchedule) { setShiftExpired(false); return }
+      const endTime = todaySchedule.endTime
+      if (!endTime) { setShiftExpired(false); return }
+      const [h, m] = endTime.split(":").map(Number)
+      const now = new Date()
+      const endMinutes = h * 60 + m
+      const nowMinutes = now.getHours() * 60 + now.getMinutes()
+      // If current time is past shift end + 1 minute, shift is expired
+      setShiftExpired(nowMinutes > endMinutes)
+    }
+    checkShiftExpiry()
+    const interval = setInterval(checkShiftExpiry, 30000) // re-check every 30s
+    return () => clearInterval(interval)
+  }, [todaySchedule])
 
   // --- Modal openers ---
   const handleClockInAttempt = () => {
@@ -464,6 +485,11 @@ export default function EmployeeDashboard() {
                 {!todaySchedule && !assignedBranch ? (
                   <div className="text-center text-sm text-muted-foreground">
                     No schedule assigned — clock-in unavailable
+                  </div>
+                ) : shiftExpired && (!latestTimeRecord || latestTimeRecord.status !== "present") ? (
+                  <div className="text-center space-y-2">
+                    <Badge variant="destructive">Absent</Badge>
+                    <p className="text-xs text-muted-foreground">Shift has ended — clock-in is no longer available</p>
                   </div>
                 ) : !latestTimeRecord || latestTimeRecord.status !== "present" ? (
                   <Button className="w-full" onClick={handleClockInAttempt} disabled={isLoading}>

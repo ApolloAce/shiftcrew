@@ -38,6 +38,10 @@ export default function EmployeeAttendancePage() {
   const [branchInfo, setBranchInfo] = useState<any | null>(null)
   const [validatedBranch, setValidatedBranch] = useState<{ branchId: string; branchName: string } | null>(null)
 
+  // Schedule & shift expiry state
+  const [todaySchedule, setTodaySchedule] = useState<{ startTime: string; endTime: string; branchName: string } | null>(null)
+  const [shiftExpired, setShiftExpired] = useState(false)
+
   useEffect(() => {
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
@@ -83,6 +87,21 @@ export default function EmployeeAttendancePage() {
                           workingUser = { ...workingUser, branchId: branch.branchId }
                           setCurrentUser(workingUser)
                           sessionStorage.setItem("currentUser", JSON.stringify(workingUser))
+
+                          // Extract shift times from schedule
+                          const shiftStr = typeof emp.shift === "string" ? emp.shift : null
+                          const shiftTimes = shiftStr ? (() => {
+                            switch (shiftStr.toUpperCase()) {
+                              case "AM": return { start: "07:00", end: "14:00" }
+                              case "PM": return { start: "14:00", end: "22:00" }
+                              default: return { start: "", end: "" }
+                            }
+                          })() : null
+                          setTodaySchedule({
+                            startTime: emp.shiftStart || shiftTimes?.start || "07:00",
+                            endTime: emp.shiftEnd || shiftTimes?.end || "14:00",
+                            branchName: branch.branchName || "Unknown",
+                          })
                           break
                         }
                       }
@@ -104,6 +123,23 @@ export default function EmployeeAttendancePage() {
       console.error("Error loading attendance data:", error)
     }
   }, [])
+
+  // --- Shift time enforcement: hide clock-in after shift end, mark absent ---
+  useEffect(() => {
+    const checkShiftExpiry = () => {
+      if (!todaySchedule) { setShiftExpired(false); return }
+      const endTime = todaySchedule.endTime
+      if (!endTime) { setShiftExpired(false); return }
+      const [h, m] = endTime.split(":").map(Number)
+      const now = new Date()
+      const endMinutes = h * 60 + m
+      const nowMinutes = now.getHours() * 60 + now.getMinutes()
+      setShiftExpired(nowMinutes > endMinutes)
+    }
+    checkShiftExpiry()
+    const interval = setInterval(checkShiftExpiry, 30000) // re-check every 30s
+    return () => clearInterval(interval)
+  }, [todaySchedule])
 
   const fetchAttendanceData = async (userData: any) => {
     try {
@@ -218,6 +254,17 @@ export default function EmployeeAttendancePage() {
       const today = toLocalDateISO(now)
       const timeIn = now.toTimeString().slice(0, 8)
 
+      // Determine if employee is clocking in late (undertime)
+      let clockInStatus = "present"
+      if (todaySchedule?.startTime) {
+        const [sh, sm] = todaySchedule.startTime.split(":").map(Number)
+        const schedStart = sh * 60 + sm
+        const nowMin = now.getHours() * 60 + now.getMinutes()
+        if (nowMin > schedStart) {
+          clockInStatus = "undertime"
+        }
+      }
+
       const res = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -226,7 +273,7 @@ export default function EmployeeAttendancePage() {
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
-          status: "present",
+          status: clockInStatus,
           timeIn,
           latitude: currentLocation?.latitude || null,
           longitude: currentLocation?.longitude || null,
@@ -239,10 +286,15 @@ export default function EmployeeAttendancePage() {
         const data = await res.json()
         if (data.alreadyClockedIn) {
           showNotification("info", "Already Clocked In", `You already clocked in today at ${formatTime(data.timeIn)}.`)
-          setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: "present" }))
+          setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: prev?.status || "present" }))
         } else {
-          setLatestTimeRecord({ date: today, status: "present", timeIn: data.timeIn || timeIn })
-          showNotification("success", "Clock In Success", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}!`)
+          setLatestTimeRecord({ date: today, status: clockInStatus, timeIn: data.timeIn || timeIn })
+          if (clockInStatus === "undertime") {
+            const schedStartFormatted = todaySchedule?.startTime ? formatTime(todaySchedule.startTime) : "N/A"
+            showNotification("info", "Undertime", `Clocked in at ${formatTime(data.timeIn || timeIn)} — schedule started at ${schedStartFormatted}. Marked as Undertime.`)
+          } else {
+            showNotification("success", "Clock In Success", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}!`)
+          }
         }
         setShowClockInModal(false)
         if (currentUser) fetchAttendanceData(currentUser)
@@ -471,16 +523,41 @@ export default function EmployeeAttendancePage() {
                   </div>
                 )}
 
+                {/* Schedule info */}
+                {todaySchedule && (
+                  <div className="flex justify-center">
+                    <div className="text-center p-4 border rounded-md bg-gray-50 dark:bg-gray-900/30">
+                      <div className="text-sm text-muted-foreground mb-1">Today's Schedule</div>
+                      <div className="font-medium flex items-center justify-center gap-2">
+                        <Clock className="h-4 w-4" />
+                        {formatTime(todaySchedule.startTime)} – {formatTime(todaySchedule.endTime)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Shift expired — absent indicator */}
+                {shiftExpired && !latestTimeRecord?.timeIn && (
+                  <div className="p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg text-center">
+                    <Badge variant="destructive" className="text-base px-4 py-1.5 mb-2">Absent</Badge>
+                    <p className="text-sm text-red-700 dark:text-red-300">
+                      Shift has ended ({todaySchedule ? `${formatTime(todaySchedule.startTime)} – ${formatTime(todaySchedule.endTime)}` : ""}) — clock-in is no longer available.
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex justify-center items-center gap-4">
                   <div className="text-center p-4 border rounded-md flex-1">
                     <div className="text-sm text-muted-foreground mb-1">Status</div>
                     <Badge
-                      variant={latestTimeRecord?.status === "present" ? "default" : "outline"}
-                      className="text-lg px-3 py-1"
+                      variant={latestTimeRecord?.status === "present" || latestTimeRecord?.status === "undertime" ? "default" : "outline"}
+                      className={`text-lg px-3 py-1 ${latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
                     >
                       {latestTimeRecord?.status === "present"
                         ? latestTimeRecord?.timeOut ? "Completed" : "Present"
-                        : "Not Clocked In"}
+                        : latestTimeRecord?.status === "undertime"
+                          ? latestTimeRecord?.timeOut ? "Completed (Undertime)" : "Undertime"
+                          : shiftExpired ? "Absent" : "Not Clocked In"}
                     </Badge>
                     {latestTimeRecord?.timeIn && (
                       <div className="mt-2 text-sm text-muted-foreground">
@@ -496,22 +573,25 @@ export default function EmployeeAttendancePage() {
                 </div>
 
                 <div className="flex justify-center gap-4">
+                  {/* Hide Clock In when shift has expired and no clock-in was made */}
+                  {!(shiftExpired && !latestTimeRecord?.timeIn) && (
                   <Button
                     size="lg"
                     className="w-40"
                     onClick={handleClockInAttempt}
-                    disabled={isLoading || (latestTimeRecord && latestTimeRecord.status === "present" && !!latestTimeRecord.timeIn)}
+                    disabled={isLoading || (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") && !!latestTimeRecord.timeIn)}
                   >
                     <Navigation className="mr-2 h-4 w-4" />
                     Clock In
                   </Button>
+                  )}
 
                   <Button
                     size="lg"
                     variant="outline"
                     className="w-40 bg-transparent"
                     onClick={handleClockOutAttempt}
-                    disabled={isLoading || !latestTimeRecord || latestTimeRecord.status !== "present" || !!latestTimeRecord.timeOut}
+                    disabled={isLoading || !latestTimeRecord || (latestTimeRecord.status !== "present" && latestTimeRecord.status !== "undertime") || !!latestTimeRecord.timeOut}
                   >
                     <Navigation className="mr-2 h-4 w-4" />
                     Clock Out
@@ -547,6 +627,7 @@ export default function EmployeeAttendancePage() {
                 <h3 className="text-lg font-medium mb-2">{format(today, "MMMM yyyy")}</h3>
                 <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/30 border"></span> Undertime</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-gray-50 dark:bg-gray-900 border"></span> Weekend</span>
                 </div>
@@ -577,6 +658,9 @@ export default function EmployeeAttendancePage() {
                       if (attendance.status === "present") {
                         bgColor = "bg-green-100 dark:bg-green-900/30"
                         indicator = "✓"
+                      } else if (attendance.status === "undertime") {
+                        bgColor = "bg-amber-100 dark:bg-amber-900/30"
+                        indicator = "⏱"
                       } else {
                         bgColor = "bg-red-100 dark:bg-red-900/30"
                         indicator = "✗"
@@ -596,7 +680,7 @@ export default function EmployeeAttendancePage() {
                     return (
                       <div key={i} className={`text-center p-2 rounded-md ${bgColor} ${isFuture ? 'opacity-50' : ''}`}>
                         <div className="text-sm">{format(day, "d")}</div>
-                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : "text-red-500"}`}>{indicator}</div>}
+                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : indicator === "⏱" ? "text-amber-600" : "text-red-500"}`}>{indicator}</div>}
                       </div>
                     )
                   })}
@@ -618,8 +702,11 @@ export default function EmployeeAttendancePage() {
                               Status: {record.status || "Unknown"}
                             </div>
                           </div>
-                          <Badge variant={record.status === "present" ? "default" : "outline"}>
-                            {record.status === "present" ? "Present" : record.status || "Unknown"}
+                          <Badge
+                            variant={record.status === "present" || record.status === "undertime" ? "default" : "outline"}
+                            className={record.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}
+                          >
+                            {record.status === "present" ? "Present" : record.status === "undertime" ? "Undertime" : record.status || "Unknown"}
                           </Badge>
                         </div>
                       ))}

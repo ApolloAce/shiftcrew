@@ -218,6 +218,10 @@ export default function SchedulingPage() {
   const [pendingDrop, setPendingDrop] = useState<{ employeeId: string; employeeName: string; branchId: string; branchName: string } | null>(null)
   const [isSavingDrop, setIsSavingDrop] = useState(false)
 
+  // Rotation generation lock — prevents double-execution from multi-click
+  const [isGenerating, setIsGenerating] = useState(false)
+  const generatingLockRef = useRef(false)
+
   // Dismissible help banner
   const [showHelp, setShowHelp] = useState(() => {
     if (typeof window !== "undefined") return !localStorage.getItem("scheduling-help-dismissed")
@@ -278,8 +282,15 @@ export default function SchedulingPage() {
     const base = Math.floor(total / numBranches)
     let remainder = total % numBranches
 
+    // Shuffle branch order so the "extra" employees go to random branches each time
+    const shuffledBranches = [...branchesList]
+    for (let i = shuffledBranches.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffledBranches[i], shuffledBranches[j]] = [shuffledBranches[j], shuffledBranches[i]]
+    }
+
     const desired: Record<string, number> = {}
-    for (const b of branchesList) {
+    for (const b of shuffledBranches) {
       desired[b.name] = base + (remainder > 0 ? 1 : 0)
       if (remainder > 0) remainder--
     }
@@ -621,6 +632,11 @@ export default function SchedulingPage() {
   }
 
   const confirmRegenerate = async () => {
+    // Prevent double-execution via ref lock (survives re-renders)
+    if (generatingLockRef.current) return
+    generatingLockRef.current = true
+    setIsGenerating(true)
+
     try {
       // Snapshot current assignments (crew -> branchId|null)
       const snapshot = crews.map((c) => {
@@ -804,6 +820,9 @@ export default function SchedulingPage() {
       console.error("[Regenerate] Fatal error:", err)
       showNotification("error", "Rotation Error", err?.message || String(err))
       setShowRegenerateConfirm(false)
+    } finally {
+      generatingLockRef.current = false
+      setIsGenerating(false)
     }
   }
 
@@ -1407,10 +1426,13 @@ export default function SchedulingPage() {
           )}
           <Button
             onClick={() => setShowRegenerateConfirm(true)}
-            disabled={branchesList.length === 0 || !hasAnyEmployees || generateCooldown > 0}
+            disabled={branchesList.length === 0 || !hasAnyEmployees || generateCooldown > 0 || isGenerating}
           >
-            <RotateCcw className="h-4 w-4 mr-2" />
-            {generateCooldown > 0 ? `Wait ${generateCooldown}s` : "Generate Rotation"}
+            {isGenerating ? (
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+            ) : (
+              <><RotateCcw className="h-4 w-4 mr-2" />{generateCooldown > 0 ? `Wait ${generateCooldown}s` : "Generate Rotation"}</>
+            )}
           </Button>
         </div>
       </div>
@@ -1956,8 +1978,14 @@ export default function SchedulingPage() {
             </p>
           </DialogHeader>
           <div className="flex justify-end gap-2 pt-4">
-            <Button variant="outline" onClick={() => setShowRegenerateConfirm(false)}>Cancel</Button>
-            <Button onClick={confirmRegenerate}>Yes, Generate</Button>
+            <Button variant="outline" onClick={() => setShowRegenerateConfirm(false)} disabled={isGenerating}>Cancel</Button>
+            <Button onClick={confirmRegenerate} disabled={isGenerating}>
+              {isGenerating ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+              ) : (
+                "Yes, Generate"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
