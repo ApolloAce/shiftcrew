@@ -11,6 +11,7 @@ files = [
     "app/employee/attendance/page.tsx",
     "app/employee/page.tsx",
     "app/api/attendance/validate-location/route.ts",
+    "app/api/cron/rotate/route.ts",
     "lib/utils.ts",
     "app/layout.tsx",
     "app/page.tsx",
