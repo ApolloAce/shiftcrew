@@ -149,6 +149,9 @@ export default function SchedulingPage() {
     branchId: string; branchName: string; isManual: boolean; shift: string;
   }>>({})
 
+  // Approved leave records overlapping the current week
+  const [approvedLeaves, setApprovedLeaves] = useState<Array<{ employeeId: string; startDate: string; endDate: string; employeeName?: string }>>([])
+
   // Derive display-friendly array from currentAssignments (drop-in for old appliedRotation)
   const currentScheduleView = useMemo(() => {
     return Object.entries(currentAssignments).map(([empId, a]) => {
@@ -165,7 +168,24 @@ export default function SchedulingPage() {
     })
   }, [currentAssignments, fireEmployees])
 
-  // Helper: get employees assigned to a specific branch
+  // Lookup: employeeId → leave endDate (for employees currently/future on approved leave this week)
+  // Past leaves (endDate < today) are excluded
+  const onLeaveMap = useMemo(() => {
+    const map = new Map<string, string>() // employeeId → endDate
+    const todayISO = formatDateLocal(new Date())
+    for (const lv of approvedLeaves) {
+      // Skip past leaves — only include leaves that haven't ended yet
+      if (lv.endDate < todayISO) continue
+      const existing = map.get(String(lv.employeeId))
+      // Keep the latest endDate if multiple leaves
+      if (!existing || lv.endDate > existing) {
+        map.set(String(lv.employeeId), lv.endDate)
+      }
+    }
+    return map
+  }, [approvedLeaves])
+
+  // Helper: get employees assigned to a specific branch (excludes on-leave employees)
   const getFirestoreEmployeesForBranch = useCallback((branchId: string | number) => {
     const branch = fireBranchMap.get(String(branchId))
     const branchName = branch?.branchName
@@ -174,13 +194,14 @@ export default function SchedulingPage() {
     const hasAssignments = Object.keys(currentAssignments).length > 0
 
     return fireEmployees.filter(emp => {
+      if (onLeaveMap.has(String(emp.id))) return false
       const a = currentAssignments[String(emp.id)]
       if (a) return a.branchName === branchName
       // Before any schedule is loaded, fall back to DB branchId
       if (!hasAssignments && emp.branchId) return String(emp.branchId) === String(branchId)
       return false
     })
-  }, [fireBranchMap, fireEmployees, currentAssignments])
+  }, [fireBranchMap, fireEmployees, currentAssignments, onLeaveMap])
   
   const [selectedDate, setSelectedDate] = useState(() => {
     // Initialize to Monday of current week
@@ -251,8 +272,11 @@ export default function SchedulingPage() {
     // Prefer Firestore employees for preview/rotation when available; fall back to store crews
     const sourceEmployees = (fireEmployees && fireEmployees.length > 0) ? fireEmployees : crews
 
+    // Exclude employees who are on approved leave for the full week
+    const availableEmployees = sourceEmployees.filter((e: any) => !onLeaveMap.has(String(e.id)))
+
     // Build a lightweight employee view; try to preserve a link to the in-store crew id when possible
-    const lightweight = sourceEmployees.map((c: any, idx: number) => {
+    const lightweight = availableEmployees.map((c: any, idx: number) => {
       const matchedStoreCrew = crews.find((sc) => {
         if (c.email && sc.email) return (c.email || "").toLowerCase() === (sc.email || "").toLowerCase()
         return (sc.firstName === c.firstName && sc.surname === c.surname)
@@ -472,6 +496,29 @@ export default function SchedulingPage() {
     }
   }
 
+  // Fetch approved leaves overlapping the current week
+  const fetchApprovedLeaves = async () => {
+    try {
+      const today = new Date()
+      const dow = today.getDay()
+      const monday = new Date(today)
+      monday.setDate(today.getDate() - dow + (dow === 0 ? -6 : 1))
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      const mondayISO = formatDateLocal(monday)
+      const sundayISO = formatDateLocal(sunday)
+
+      const res = await fetch(`/api/leave?status=approved`, { cache: 'no-store' })
+      if (!res.ok) return
+      const allLeaves: any[] = await res.json()
+      // Filter to leaves that overlap this week
+      const overlapping = allLeaves.filter((lv: any) => lv.startDate <= sundayISO && lv.endDate >= mondayISO)
+      setApprovedLeaves(overlapping)
+    } catch (err) {
+      console.error('Error fetching approved leaves:', err)
+    }
+  }
+
   // Single consolidated mount effect — all initial data loads in parallel
   useEffect(() => {
     Promise.all([
@@ -480,6 +527,7 @@ export default function SchedulingPage() {
       fetchWeekSchedulesFromFirestore(),
       fetchCurrentWeekSchedule(),
       fetchWeekAttendance(),
+      fetchApprovedLeaves(),
     ])
   }, [])
 
@@ -1195,12 +1243,16 @@ export default function SchedulingPage() {
   // --- Drag-and-drop computed values and handlers ---
 
   // Unassigned employees: not in currentAssignments (and no DB branch fallback if no schedules loaded yet)
+  // Also includes on-leave employees (pulled out of branch assignments)
   const unassignedEmployees = useMemo(() => {
     const allEmps = (fireEmployees && fireEmployees.length > 0) ? fireEmployees : []
     const hasAssignments = Object.keys(currentAssignments).length > 0
 
     return allEmps.filter(emp => {
-      const a = currentAssignments[String(emp.id)]
+      const empId = String(emp.id)
+      // On-leave employees always show in unassigned pool
+      if (onLeaveMap.has(empId)) return true
+      const a = currentAssignments[empId]
       if (a) return false // assigned via schedule
       if (!hasAssignments && emp.branchId) return false // DB branch fallback
       return true
@@ -1209,15 +1261,18 @@ export default function SchedulingPage() {
       const name = `${emp.firstName} ${emp.surname}`.toLowerCase()
       return name.includes(searchQuery.toLowerCase())
     })
-  }, [fireEmployees, currentAssignments, searchQuery])
+  }, [fireEmployees, currentAssignments, searchQuery, onLeaveMap])
 
   // Crew assigned to a specific branch (by name), filtered by search query
+  // Excludes employees who are on approved leave
   const getCrewForBranchByName = useCallback((branchName: string) => {
     const allEmps = (fireEmployees && fireEmployees.length > 0) ? fireEmployees : []
     const hasAssignments = Object.keys(currentAssignments).length > 0
     const branch = fireBranches.find((b: any) => b.branchName === branchName || b.name === branchName)
 
     return allEmps.filter(emp => {
+      // On-leave employees are never shown in a branch column
+      if (onLeaveMap.has(String(emp.id))) return false
       const a = currentAssignments[String(emp.id)]
       if (a) return a.branchName === branchName
       if (!hasAssignments && emp.branchId && branch) return String(emp.branchId) === String(branch.id)
@@ -1227,7 +1282,7 @@ export default function SchedulingPage() {
       const name = `${emp.firstName} ${emp.surname}`.toLowerCase()
       return name.includes(searchQuery.toLowerCase())
     })
-  }, [fireEmployees, fireBranches, currentAssignments, searchQuery])
+  }, [fireEmployees, fireBranches, currentAssignments, searchQuery, onLeaveMap])
 
   // Handle duration dialog confirmation after a drag-and-drop assignment
   const handleDurationConfirm = async (duration: "today" | "rest_of_week" | "full_week") => {
@@ -1605,11 +1660,15 @@ export default function SchedulingPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-1.5 max-h-[450px] overflow-y-auto pr-1">
-              {unassignedEmployees.map(emp => (
+              {unassignedEmployees.map(emp => {
+                const isOnLeave = onLeaveMap.has(String(emp.id))
+                const leaveEnd = isOnLeave ? onLeaveMap.get(String(emp.id)) : null
+                return (
                 <div
                   key={emp.id}
-                  draggable
+                  draggable={!isOnLeave}
                   onDragStart={(e) => {
+                    if (isOnLeave) { e.preventDefault(); return }
                     const data = { id: String(emp.id), name: `${emp.firstName} ${emp.surname}`, fromBranch: null }
                     draggedEmployeeRef.current = data
                     setDraggedEmployee(data)
@@ -1617,19 +1676,29 @@ export default function SchedulingPage() {
                     e.dataTransfer.setData("text/plain", JSON.stringify(data))
                   }}
                   onDragEnd={() => { draggedEmployeeRef.current = null; setDraggedEmployee(null) }}
-                  className={`p-2.5 border rounded-lg bg-card cursor-grab active:cursor-grabbing hover:shadow-md transition-all select-none ${
-                    draggedEmployee?.id === String(emp.id) ? "opacity-40 scale-95" : ""
+                  className={`p-2.5 border rounded-lg transition-all select-none ${
+                    isOnLeave
+                      ? "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-800 opacity-80 cursor-not-allowed"
+                      : `bg-card cursor-grab active:cursor-grabbing hover:shadow-md ${draggedEmployee?.id === String(emp.id) ? "opacity-40 scale-95" : ""}`
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <GripVertical className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    {!isOnLeave && <GripVertical className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{emp.firstName} {emp.surname}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium text-sm truncate">{emp.firstName} {emp.surname}</span>
+                        {isOnLeave && (
+                          <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-orange-400 text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/40 whitespace-nowrap flex-shrink-0">
+                            ON LEAVE until {leaveEnd}
+                          </Badge>
+                        )}
+                      </div>
                       {emp.email && <div className="text-[10px] text-muted-foreground truncate">{emp.email}</div>}
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
               {unassignedEmployees.length === 0 && (
                 <div className="text-center py-6 text-xs text-muted-foreground">
                   {searchQuery ? "No matches" : (

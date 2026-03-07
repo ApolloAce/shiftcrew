@@ -42,6 +42,10 @@ export default function EmployeeAttendancePage() {
   const [todaySchedule, setTodaySchedule] = useState<{ startTime: string; endTime: string; branchName: string } | null>(null)
   const [shiftExpired, setShiftExpired] = useState(false)
 
+  // On-leave status
+  const [isOnLeave, setIsOnLeave] = useState(false)
+  const [leaveEndDate, setLeaveEndDate] = useState<string | null>(null)
+
   useEffect(() => {
     const user = sessionStorage.getItem("currentUser")
     if (!user) return
@@ -114,6 +118,22 @@ export default function EmployeeAttendancePage() {
             }
 
             fetchAttendanceData(workingUser)
+
+            // Check if employee is currently on approved leave
+            try {
+              const today = toLocalDateISO()
+              const leaveRes = await fetch(`/api/leave?employeeId=${workingUser.id}&status=approved`)
+              if (leaveRes.ok) {
+                const leaves = await leaveRes.json()
+                if (Array.isArray(leaves)) {
+                  const activeLeave = leaves.find((lv: any) => lv.startDate <= today && lv.endDate >= today)
+                  if (activeLeave) {
+                    setIsOnLeave(true)
+                    setLeaveEndDate(activeLeave.endDate)
+                  }
+                }
+              }
+            } catch {}
           })
           .catch(() => {
             fetchAttendanceData(userData)
@@ -536,8 +556,18 @@ export default function EmployeeAttendancePage() {
                   </div>
                 )}
 
+                {/* On Leave indicator */}
+                {isOnLeave && (
+                  <div className="p-4 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg text-center">
+                    <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-base px-4 py-1.5 mb-2">ON LEAVE</Badge>
+                    <p className="text-sm text-orange-700 dark:text-orange-300">
+                      You are on approved leave until {leaveEndDate}. Clock-in is not available.
+                    </p>
+                  </div>
+                )}
+
                 {/* Shift expired — absent indicator */}
-                {shiftExpired && !latestTimeRecord?.timeIn && (
+                {!isOnLeave && shiftExpired && !latestTimeRecord?.timeIn && (
                   <div className="p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg text-center">
                     <Badge variant="destructive" className="text-base px-4 py-1.5 mb-2">Absent</Badge>
                     <p className="text-sm text-red-700 dark:text-red-300">
@@ -551,9 +581,11 @@ export default function EmployeeAttendancePage() {
                     <div className="text-sm text-muted-foreground mb-1">Status</div>
                     <Badge
                       variant={latestTimeRecord?.status === "present" || latestTimeRecord?.status === "undertime" ? "default" : "outline"}
-                      className={`text-lg px-3 py-1 ${latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
+                      className={`text-lg px-3 py-1 ${isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
                     >
-                      {latestTimeRecord?.status === "present"
+                      {isOnLeave
+                        ? "On Leave"
+                        : latestTimeRecord?.status === "present"
                         ? latestTimeRecord?.timeOut ? "Completed" : "Present"
                         : latestTimeRecord?.status === "undertime"
                           ? latestTimeRecord?.timeOut ? "Completed (Undertime)" : "Undertime"
@@ -573,6 +605,9 @@ export default function EmployeeAttendancePage() {
                 </div>
 
                 <div className="flex justify-center gap-4">
+                  {/* Hide Clock In when on leave */}
+                  {isOnLeave ? null : (
+                  <>
                   {/* Hide Clock In when shift has expired and no clock-in was made */}
                   {!(shiftExpired && !latestTimeRecord?.timeIn) && (
                   <Button
@@ -596,6 +631,8 @@ export default function EmployeeAttendancePage() {
                     <Navigation className="mr-2 h-4 w-4" />
                     Clock Out
                   </Button>
+                  </>
+                  )}
                 </div>
 
                 <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-md">

@@ -28,6 +28,10 @@ export default function EmployeeDashboard() {
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([])
   const [accountStatus, setAccountStatus] = useState<"pending" | "approved" | "rejected" | undefined>(undefined)
 
+  // On-leave status for current employee
+  const [isOnLeave, setIsOnLeave] = useState(false)
+  const [leaveEndDate, setLeaveEndDate] = useState<string | null>(null)
+
   // Location-based clock-in/out modal state
   const [showClockInModal, setShowClockInModal] = useState(false)
   const [showClockOutModal, setShowClockOutModal] = useState(false)
@@ -56,13 +60,23 @@ export default function EmployeeDashboard() {
         try {
           const today = toLocalDateISO()
 
-          const [branchRes, attendanceRes, leaveRes] = await Promise.all([
+          const [branchRes, attendanceRes, leaveRes, approvedLeaveRes] = await Promise.all([
             userData.branchId
               ? fetch(`/api/branches?id=${userData.branchId}`).then((r) => r.ok ? r.json() : null)
               : Promise.resolve(null),
             fetch(`/api/attendance?employeeId=${userData.id}&date=${today}`).then((r) => r.ok ? r.json() : []),
             fetch(`/api/leave?employeeId=${userData.id}&status=pending`).then((r) => r.ok ? r.json() : []),
+            fetch(`/api/leave?employeeId=${userData.id}&status=approved`).then((r) => r.ok ? r.json() : []),
           ])
+
+          // Check if employee is currently on approved leave
+          if (Array.isArray(approvedLeaveRes)) {
+            const activeLeave = approvedLeaveRes.find((lv: any) => lv.startDate <= today && lv.endDate >= today)
+            if (activeLeave) {
+              setIsOnLeave(true)
+              setLeaveEndDate(activeLeave.endDate)
+            }
+          }
 
           // Set initial branch from users table; schedule-based branch will override below
           setAssignedBranch(branchRes)
@@ -458,8 +472,11 @@ export default function EmployeeDashboard() {
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div className="text-sm text-muted-foreground">Status:</div>
-                <Badge variant={latestTimeRecord && latestTimeRecord.status === "present" ? "default" : "outline"}>
-                  {latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In"}
+                <Badge
+                  variant={isOnLeave ? "default" : (latestTimeRecord && latestTimeRecord.status === "present" ? "default" : "outline")}
+                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : ""}
+                >
+                  {isOnLeave ? "On Leave" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
                 </Badge>
               </div>
 
@@ -482,7 +499,12 @@ export default function EmployeeDashboard() {
               )}
 
               <div className="pt-2">
-                {!todaySchedule && !assignedBranch ? (
+                {isOnLeave ? (
+                  <div className="text-center space-y-2">
+                    <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1">ON LEAVE</Badge>
+                    <p className="text-xs text-muted-foreground">You are on approved leave until {leaveEndDate}</p>
+                  </div>
+                ) : !todaySchedule && !assignedBranch ? (
                   <div className="text-center text-sm text-muted-foreground">
                     No schedule assigned — clock-in unavailable
                   </div>
