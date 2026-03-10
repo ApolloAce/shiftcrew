@@ -10,6 +10,8 @@ files = [
     "app/dashboard/scheduling/page.tsx",
     "app/employee/attendance/page.tsx",
     "app/employee/page.tsx",
+    "app/employee/schedule/page.tsx",
+    "app/employee/notifications/page.tsx",
     "app/api/attendance/validate-location/route.ts",
     "app/api/cron/rotate/route.ts",
     "app/api/cron/post-leave/route.ts",

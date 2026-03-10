@@ -96,14 +96,14 @@ export default function EmployeeAttendancePage() {
                           const shiftStr = typeof emp.shift === "string" ? emp.shift : null
                           const shiftTimes = shiftStr ? (() => {
                             switch (shiftStr.toUpperCase()) {
-                              case "AM": return { start: "07:00", end: "14:00" }
+                              case "AM": return { start: "07:00", end: "22:00" }
                               case "PM": return { start: "14:00", end: "22:00" }
                               default: return { start: "", end: "" }
                             }
                           })() : null
                           setTodaySchedule({
                             startTime: emp.shiftStart || shiftTimes?.start || "07:00",
-                            endTime: emp.shiftEnd || shiftTimes?.end || "14:00",
+                            endTime: emp.shiftEnd || shiftTimes?.end || "22:00",
                             branchName: branch.branchName || "Unknown",
                           })
                           break
@@ -666,7 +666,6 @@ export default function EmployeeAttendancePage() {
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/30 border"></span> Undertime</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
-                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-gray-50 dark:bg-gray-900 border"></span> Weekend</span>
                 </div>
                 <div className="grid grid-cols-7 gap-2">
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
@@ -702,12 +701,10 @@ export default function EmployeeAttendancePage() {
                         bgColor = "bg-red-100 dark:bg-red-900/30"
                         indicator = "✗"
                       }
-                    } else if (isPast && !isWeekend) {
-                      // Past weekday with no attendance record = Absent
+                    } else if (isPast) {
+                      // Past day with no attendance record = Absent (including weekends)
                       bgColor = "bg-red-50 dark:bg-red-900/20"
                       indicator = "✗"
-                    } else if (isWeekend) {
-                      bgColor = "bg-gray-50 dark:bg-gray-900"
                     }
 
                     if (isSameDay(day, today)) {

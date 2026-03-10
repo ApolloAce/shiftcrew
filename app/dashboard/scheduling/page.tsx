@@ -23,7 +23,7 @@ function getShiftTimes(shift: string): { shiftStart: string; shiftEnd: string } 
   switch (shift?.toUpperCase()) {
     case "PM": return { shiftStart: "14:00", shiftEnd: "22:00" }
     case "AM":
-    default: return { shiftStart: "07:00", shiftEnd: "14:00" }
+    default: return { shiftStart: "07:00", shiftEnd: "22:00" }
   }
 }
 

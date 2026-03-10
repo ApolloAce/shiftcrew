@@ -82,7 +82,7 @@ export default function EmployeeNotificationsPage() {
                 // Map shift string to actual times
                 const shiftTimes = typeof found.shift === "string" ? (() => {
                   switch (found.shift.toUpperCase()) {
-                    case "AM": return { start: "07:00", end: "14:00" }
+                    case "AM": return { start: "07:00", end: "22:00" }
                     case "PM": return { start: "14:00", end: "22:00" }
                     default: return { start: "", end: "" }
                   }
