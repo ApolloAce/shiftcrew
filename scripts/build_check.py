@@ -17,18 +17,48 @@ if action == "kill":
     print(o.read().decode())
 
 elif action == "force":
-    # Kill any build, then restart PM2
-    print("Killing builds...")
-    i, o, e = c.exec_command("pkill -9 -f 'next build' 2>/dev/null; sleep 1; echo BUILD_KILLED", timeout=15)
-    print(o.read().decode())
-    print("Restarting PM2...")
-    i, o, e = c.exec_command("cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env 2>&1", timeout=30)
-    print(o.read().decode())
-    print("DONE")
+    # Safer force: do not kill an active build; ensure build artifacts exist before PM2 restart.
+    print("Checking build status...")
+    i, o, e = c.exec_command("pgrep -f 'next build' || echo NOT_RUNNING", timeout=15)
+    build_status = o.read().decode().strip()
+
+    if build_status != "NOT_RUNNING":
+        print(f"Build is currently running (PID: {build_status}).")
+        print("Skipping restart to avoid .next corruption. Run: python scripts/build_check.py check")
+    else:
+        print("No active build process.")
+        i, o, e = c.exec_command("test -f /var/www/shiftcrew/.next/BUILD_ID && echo BUILD_OK || echo BUILD_MISSING", timeout=15)
+        artifact_status = o.read().decode().strip()
+
+        if artifact_status != "BUILD_OK":
+            print("Build artifacts missing. Running npm run build...")
+            i, o, e = c.exec_command("cd /var/www/shiftcrew && npm run build > /tmp/nextbuild.log 2>&1 && echo BUILD_DONE || echo BUILD_FAILED", timeout=1800)
+            result = o.read().decode().strip()
+            print(result)
+            if "BUILD_FAILED" in result:
+                i, o, e = c.exec_command("tail -40 /tmp/nextbuild.log", timeout=30)
+                print(o.read().decode())
+                print("Build failed; PM2 restart skipped.")
+            else:
+                print("Restarting PM2...")
+                i, o, e = c.exec_command("cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env 2>&1", timeout=30)
+                print(o.read().decode())
+                print("DONE")
+        else:
+            print("Build artifacts present.")
+            print("Restarting PM2...")
+            i, o, e = c.exec_command("cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env 2>&1", timeout=30)
+            print(o.read().decode())
+            print("DONE")
 
 elif action == "rebuild":
-    i, o, e = c.exec_command("cd /var/www/shiftcrew && rm -rf .next && nohup npx next build > /tmp/nextbuild.log 2>&1 & echo $!", timeout=30)
-    print("Build PID:", o.read().decode().strip())
+    cmd = "cd /var/www/shiftcrew && rm -rf .next && nohup npx next build > /tmp/nextbuild.log 2>&1 < /dev/null & echo BUILD_STARTED"
+    i, o, e = c.exec_command(cmd, timeout=30)
+    out = o.read().decode().strip()
+    err = e.read().decode().strip()
+    print(out or "BUILD_STARTED")
+    if err:
+        print(err)
 
 elif action == "restart":
     i, o, e = c.exec_command("cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env 2>&1", timeout=30)

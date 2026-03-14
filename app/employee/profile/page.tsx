@@ -14,6 +14,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 export default function EmployeeProfilePage() {
   const { showNotification } = useNotification()
 
+  const formatJoinedDate = (value: string) => {
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return value
+    return parsed.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })
+  }
+
   const [currentUser, setCurrentUser] = useState<{ id: number | string; branchId?: string | number | null } | null>(null)
   const [employeeData, setEmployeeData] = useState<any | null>(null)
   const [assignedBranch, setAssignedBranch] = useState<any | null>(null)
@@ -258,7 +268,7 @@ export default function EmployeeProfilePage() {
                 {employeeData.hireDate && (
                   <div className="flex items-center gap-2 text-sm">
                     <Calendar className="h-4 w-4 text-muted-foreground" />
-                    <span>Joined {employeeData.hireDate}</span>
+                    <span>Joined {formatJoinedDate(employeeData.hireDate)}</span>
                   </div>
                 )}
               </div>

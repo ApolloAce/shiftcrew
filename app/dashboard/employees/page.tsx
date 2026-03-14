@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
@@ -32,13 +31,85 @@ export default function EmployeesPage() {
   )
 }
 
+type EditEmployeeDialogProps = {
+  employee: Employee
+  isProcessing: boolean
+  onCancel: () => void
+  onSave: (updatedEmployee: any) => Promise<void>
+}
+
+function EditEmployeeDialogContent({ employee, isProcessing, onCancel, onSave }: EditEmployeeDialogProps) {
+  const [form, setForm] = useState<any>({ ...employee })
+  const [mode, setMode] = useState<"full-time" | "part-time">((employee.type || "full-time") as "full-time" | "part-time")
+
+  return (
+    <div className="space-y-6 py-4">
+      <div className="flex justify-center gap-4">
+        <Button variant={mode === "full-time" ? "default" : "outline"} onClick={() => setMode("full-time")}>
+          Full-Time
+        </Button>
+        <Button variant={mode === "part-time" ? "default" : "outline"} onClick={() => setMode("part-time")}>
+          Part-Time
+        </Button>
+      </div>
+
+      <div className="space-y-4">
+        <div className="grid gap-2">
+          <Label htmlFor="editFirstName">First Name</Label>
+          <Input
+            id="editFirstName"
+            value={form?.firstName || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, firstName: e.target.value }))}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="editSurname">Surname</Label>
+          <Input
+            id="editSurname"
+            value={form?.surname || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, surname: e.target.value }))}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="editNickname">Nickname</Label>
+          <Input
+            id="editNickname"
+            value={form?.nickname || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, nickname: e.target.value }))}
+          />
+        </div>
+
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() =>
+            onSave({
+              firstName: form?.firstName || "",
+              surname: form?.surname || "",
+              nickname: form?.nickname || "",
+              type: mode,
+            })
+          }
+          disabled={isProcessing}
+        >
+          {isProcessing ? "Saving..." : "Save Changes"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function EmployeesContent() {
   const { showNotification } = useNotification()
   const { openDialog, closeDialog, openConfirmDialog } = useDialog()
   const [activeTab, setActiveTab] = useState<"active" | "archived">("active")
   const [searchQuery, setSearchQuery] = useState("")
-  const [editingEmployee, setEditingEmployee] = useState<any>(null)
-  const [mode, setMode] = useState<"full-time" | "part-time">("full-time")
   const [isProcessing, setIsProcessing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [activeCrews, setActiveCrews] = useState<Employee[]>([])
@@ -100,136 +171,40 @@ function EmployeesContent() {
       if (isProcessing) return
 
       try {
-        setEditingEmployee({ ...employee })
-        setMode((employee.type || "full-time") as "full-time" | "part-time")
-
         openDialog(
-          <div className="space-y-6 py-4">
-            <div className="flex justify-center gap-4">
-              <Button variant={mode === "full-time" ? "default" : "outline"} onClick={() => setMode("full-time")}>
-                Full-Time
-              </Button>
-              <Button variant={mode === "part-time" ? "default" : "outline"} onClick={() => setMode("part-time")}>
-                Part-Time
-              </Button>
-            </div>
+          <EditEmployeeDialogContent
+            employee={employee}
+            isProcessing={isProcessing}
+            onCancel={closeDialog}
+            onSave={async (updatedEmployee) => {
+              setIsProcessing(true)
+              try {
+                await updateEmployee(employee.id, updatedEmployee)
+                closeDialog()
 
-            <div className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="editFirstName">First Name</Label>
-                <Input
-                  id="editFirstName"
-                  value={editingEmployee?.firstName || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      firstName: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+                // Refresh the employee list
+                const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+                setActiveCrews(active)
+                setArchivedCrews(archived)
 
-              <div className="grid gap-2">
-                <Label htmlFor="editSurname">Surname</Label>
-                <Input
-                  id="editSurname"
-                  value={editingEmployee?.surname || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      surname: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="editNickname">Nickname</Label>
-                <Input
-                  id="editNickname"
-                  value={editingEmployee?.nickname || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      nickname: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              {mode === "part-time" && (
-                <div className="grid gap-2">
-                  <Label>Availability</Label>
-                  <div className="grid grid-cols-7 gap-2">
-                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
-                      <div key={day} className="flex flex-col items-center">
-                        <span className="text-sm">{day}</span>
-                        <Checkbox
-                          checked={editingEmployee?.availability?.includes(day)}
-                          onCheckedChange={(checked) => {
-                            if (!editingEmployee) return
-                            const availability = [...(editingEmployee.availability || [])]
-                            if (checked) {
-                              if (!availability.includes(day)) {
-                                availability.push(day)
-                              }
-                            } else {
-                              const index = availability.indexOf(day)
-                              if (index !== -1) {
-                                availability.splice(index, 1)
-                              }
-                            }
-                            setEditingEmployee((prev: any) => ({
-                              ...prev,
-                              availability,
-                            }))
-                          }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={closeDialog}>
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  if (editingEmployee) {
-                    setIsProcessing(true)
-                    try {
-                      const updatedEmployee = { ...editingEmployee, type: mode }
-                      await updateEmployee(editingEmployee.id, updatedEmployee)
-                      closeDialog()
-
-                      // Refresh the employee list
-                      const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
-                      setActiveCrews(active)
-                      setArchivedCrews(archived)
-
-                      const employeeName = `${updatedEmployee.firstName} ${updatedEmployee.surname}`
-                      showNotification(
-                        "success",
-                        "Employee Updated",
-                        `${employeeName}'s information has been updated successfully.`,
-                      )
-                    } catch (error) {
-                      console.error("Error updating employee:", error)
-                      showNotification("error", "Error", "Failed to update employee")
-                    } finally {
-                      setIsProcessing(false)
-                    }
-                  }
-                }}
-                disabled={isProcessing}
-              >
-                {isProcessing ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          </div>,
+                const employeeName = `${updatedEmployee.firstName} ${updatedEmployee.surname}`
+                showNotification(
+                  "success",
+                  "Employee Updated",
+                  `${employeeName}'s information has been updated successfully.`,
+                )
+              } catch (error) {
+                console.error("Error updating employee:", error)
+                showNotification(
+                  "error",
+                  "Error",
+                  error instanceof Error ? `Failed to update employee: ${error.message}` : "Failed to update employee",
+                )
+              } finally {
+                setIsProcessing(false)
+              }
+            }}
+          />,
           "Edit Employee",
         )
       } catch (error) {
@@ -237,7 +212,7 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to open edit dialog")
       }
     },
-    [openDialog, closeDialog, showNotification, mode, editingEmployee, isProcessing],
+    [openDialog, closeDialog, showNotification, isProcessing],
   )
 
   const handleArchiveClick = useCallback(

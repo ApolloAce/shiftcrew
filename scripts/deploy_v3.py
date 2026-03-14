@@ -8,6 +8,8 @@ REMOTE_DIR = "/var/www/shiftcrew"
 
 files = [
     "app/dashboard/page.tsx",
+    "app/dashboard/employees/page.tsx",
+    "app/dashboard/reports/page.tsx",
     "app/dashboard/scheduling/page.tsx",
     "app/dashboard/leave-approvals/page.tsx",
     "app/employee/attendance/page.tsx",
@@ -19,8 +21,10 @@ files = [
     "app/api/cron/rotate/route.ts",
     "app/api/cron/post-leave/route.ts",
     "app/api/leave/route.ts",
+    "app/api/employees/route.ts",
     "app/api/employees/password/route.ts",
     "app/employee/profile/page.tsx",
+    "components/providers.tsx",
     "lib/utils.ts",
     "app/layout.tsx",
     "app/page.tsx",

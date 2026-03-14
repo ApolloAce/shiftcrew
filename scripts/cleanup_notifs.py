@@ -5,16 +5,20 @@ c = paramiko.SSHClient()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 c.connect('104.248.217.57', username='root', password='@Emorej02e')
 
-# Check if build is running and PM2 status
 cmds = [
-    "ps aux | grep 'next build' | grep -v grep | head -3",
-    "ls -la /var/www/shiftcrew/.next/BUILD_ID 2>&1",
+    "cd /var/www/shiftcrew && pm2 stop shiftcrew",
+    "cd /var/www/shiftcrew && rm -rf .next",
+    "cd /var/www/shiftcrew && npm run build",
+    "cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env",
     "pm2 status",
-    "ls -la /var/www/shiftcrew/app/api/employees/password/route.ts 2>&1",
+    "curl -I -s http://127.0.0.1:3000 | head -5",
 ]
 for cmd in cmds:
     print(f"\n--- {cmd} ---")
     i, o, e = c.exec_command(cmd)
     print(o.read().decode().strip())
+    err = e.read().decode().strip()
+    if err:
+        print(err)
 
 c.close()

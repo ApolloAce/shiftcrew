@@ -79,14 +79,55 @@ export async function PUT(req: Request) {
     const { id, ...updates } = body;
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
 
+    // Accept only known updatable columns to prevent invalid/system fields from breaking updates.
+    const allowedFields = new Set([
+      "firstName",
+      "surname",
+      "nickname",
+      "email",
+      "phone",
+      "address",
+      "emergencyContact",
+      "position",
+      "type",
+      "availability",
+      "isPresent",
+      "isEmployee",
+      "archived",
+      "role",
+      "status",
+      "branchId",
+      "hireDate",
+    ]);
+
+    const sanitizedUpdates: Record<string, any> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (!allowedFields.has(key)) continue;
+      sanitizedUpdates[key] = value;
+    }
+
     const setClauses: string[] = [];
     const params: any[] = [];
 
-    for (const [key, value] of Object.entries(updates)) {
+    for (const [key, value] of Object.entries(sanitizedUpdates)) {
       if (key === "id") continue;
-      const col = key === "availability" ? key : key;
-      setClauses.push(`\`${col}\` = ?`);
-      params.push(key === "availability" ? JSON.stringify(value) : value);
+
+      let normalizedValue: any = value;
+      if (key === "availability") {
+        normalizedValue = JSON.stringify(value ?? []);
+      }
+
+      // MySQL DATE column expects YYYY-MM-DD (not full ISO timestamp)
+      if (key === "hireDate" && typeof value === "string" && value.includes("T")) {
+        normalizedValue = value.split("T")[0];
+      }
+
+      setClauses.push(`\`${key}\` = ?`);
+      params.push(normalizedValue);
+    }
+
+    if (setClauses.length === 0) {
+      return NextResponse.json({ message: "No valid fields to update" }, { status: 400 });
     }
 
     setClauses.push("updatedAt = ?");

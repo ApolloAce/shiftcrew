@@ -276,6 +276,38 @@ export default function ReportsPage() {
     return date.toISOString().split('T')[0]
   }
 
+  // Normalize schedule payloads: support both branchAssignments and legacy assignments.
+  const getScheduledEmployeesFromSchedule = (schedule: any) => {
+    const rows: Array<{ employeeId: string; employeeName?: string; branchName: string }> = []
+
+    if (schedule?.branchAssignments && Array.isArray(schedule.branchAssignments) && schedule.branchAssignments.length > 0) {
+      for (const branch of schedule.branchAssignments) {
+        const branchName = branch.branchName || "Unassigned"
+        const employees = Array.isArray(branch.employees) ? branch.employees : []
+        for (const emp of employees) {
+          rows.push({
+            employeeId: String(emp.employeeId),
+            employeeName: emp.employeeName,
+            branchName,
+          })
+        }
+      }
+      return rows
+    }
+
+    if (schedule?.assignments && Array.isArray(schedule.assignments) && schedule.assignments.length > 0) {
+      for (const emp of schedule.assignments) {
+        rows.push({
+          employeeId: String(emp.employeeId),
+          employeeName: emp.employeeName,
+          branchName: emp.branchName || "Unassigned",
+        })
+      }
+    }
+
+    return rows
+  }
+
   // Fetch schedules and real attendance for the entire week (Monday to Sunday)
   useEffect(() => {
     const fetchWeekData = async () => {
@@ -338,75 +370,83 @@ export default function ReportsPage() {
   }, [weekAttendance])
 
   // Generate historical attendance data for the entire week
-  // Cross-references schedule assignments with actual daily_attendance records
+  // Cross-references schedule assignments with actual daily_attendance records.
+  // This list is intentionally NOT grouped by branch.
   const attendanceHistory = useMemo(() => {
-    const branchEmployees: Record<string, any[]> = {}
-    
-    // Initialize branches
-    branchEmployees["Unassigned"] = []
-    branches.forEach((branch) => {
-      branchEmployees[branch.branchName] = []
-    })
+    const rows: any[] = []
 
-    // Count attendance across the week using REAL attendance data
-    const employeeAttendance: Record<string, { present: number; total: number }> = {}
+    // Count attendance across the week using REAL attendance data.
+    // Track only employees that are actually scheduled for the selected week.
+    const employeeAttendance: Record<string, { present: number; total: number; branchName: string; employeeName?: string }> = {}
 
-    // Initialize attendance tracking for all employees
-    crews.forEach((crew) => {
-      employeeAttendance[String(crew.id)] = { present: 0, total: 0 }
-    })
-
-    // Count presence for each day in the week
     weekSchedules.forEach((schedule: any) => {
-      if (schedule && schedule.branchAssignments) {
-        const scheduleDate = schedule.scheduleFor || schedule.date
-        schedule.branchAssignments.forEach((branchAssignment: any) => {
-          const employees = branchAssignment.employees || []
-          employees.forEach((emp: any) => {
-            const empId = String(emp.employeeId)
-            if (employeeAttendance[empId]) {
-              employeeAttendance[empId].total++
-              // Check real attendance from daily_attendance table
-              const realStatus = attendanceLookup[`${empId}_${scheduleDate}`]
-              if (realStatus === 'present') {
-                employeeAttendance[empId].present++
-              }
-              // If no attendance record exists, count as absent (not present)
-            }
-          })
-        })
-      }
+      const scheduleDate = schedule?.scheduleFor || schedule?.date
+      if (!scheduleDate) return
+
+      const scheduledEmployees = getScheduledEmployeesFromSchedule(schedule)
+      const seenForDay = new Set<string>()
+
+      scheduledEmployees.forEach((emp) => {
+        // Guard against duplicate employee rows for the same day.
+        const dayKey = `${emp.employeeId}_${scheduleDate}`
+        if (seenForDay.has(dayKey)) return
+        seenForDay.add(dayKey)
+
+        if (!employeeAttendance[emp.employeeId]) {
+          employeeAttendance[emp.employeeId] = {
+            present: 0,
+            total: 0,
+            branchName: emp.branchName || "Unassigned",
+            employeeName: emp.employeeName,
+          }
+        }
+
+        employeeAttendance[emp.employeeId].total++
+        employeeAttendance[emp.employeeId].branchName = emp.branchName || employeeAttendance[emp.employeeId].branchName
+        if (emp.employeeName) employeeAttendance[emp.employeeId].employeeName = emp.employeeName
+
+        const realStatus = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
+        if (realStatus === "present") {
+          employeeAttendance[emp.employeeId].present++
+        }
+      })
     })
 
-    // Build attendance history from week data
-    crews.forEach((crew) => {
-      const assignedBranch = getAssignedBranch(crew.id)
-      const branchName = assignedBranch ? assignedBranch.branchName : "Unassigned"
-      const attendance = employeeAttendance[String(crew.id)]
-      
-      branchEmployees[branchName].push({
-        ...crew,
+    // Build attendance history from scheduled employee week data only.
+    Object.entries(employeeAttendance).forEach(([employeeId, attendance]) => {
+      if (attendance.total <= 0) return
+
+      const crew = crews.find((c: any) => String(c.id) === String(employeeId))
+      const assignedBranch = crew ? getAssignedBranch(crew.id) : null
+      const branchName = attendance.branchName || (assignedBranch ? assignedBranch.branchName : "Unassigned")
+
+      const displayName = crew
+        ? `${crew.firstName || ""} ${crew.surname || ""}`.trim() || attendance.employeeName || `Employee ${employeeId}`
+        : attendance.employeeName || `Employee ${employeeId}`
+
+      rows.push({
+        ...(crew || { id: employeeId }),
+        id: crew?.id || employeeId,
+        branchName,
+        displayName,
         wasPresent: attendance.present > 0,
         presentDays: attendance.present,
         totalDays: attendance.total,
       })
     })
 
-    return Object.entries(branchEmployees)
-      .filter(([_, employees]: [string, any[]]) => employees.length > 0)
-      .map(([branchName, employees]: [string, any[]]) => ({
-        branchName,
-        employees,
-        presentCount: employees.filter((emp: any) => emp.wasPresent).length,
-        absentCount: employees.filter((emp: any) => !emp.wasPresent).length,
-      }))
+    return rows
+      .filter((emp: any) => (emp.totalDays || 0) > 0)
+      .sort((a: any, b: any) => {
+        if (a.wasPresent !== b.wasPresent) return Number(b.wasPresent) - Number(a.wasPresent)
+        return (a.displayName || "").localeCompare(b.displayName || "")
+      })
   }, [weekSchedules, weekAttendance, attendanceLookup, crews, branches])
 
   // Calculate overall attendance for the week
   const overallAttendance = useMemo(() => {
-    const allEmployees = attendanceHistory.flatMap((branch: any) => branch.employees)
-    const presentCount = allEmployees.filter((emp: any) => emp.wasPresent).length
-    const totalCount = allEmployees.length
+    const presentCount = attendanceHistory.filter((emp: any) => emp.wasPresent).length
+    const totalCount = attendanceHistory.length
     const rate = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
 
     return { presentCount, totalCount, rate, absentCount: totalCount - presentCount }
@@ -423,39 +463,39 @@ export default function ReportsPage() {
 
     // Count employees by type from all schedules
     weekSchedules.forEach((schedule: any) => {
-      if (schedule && schedule.branchAssignments) {
-        const scheduleDate = schedule.scheduleFor || schedule.date
-        schedule.branchAssignments.forEach((branchAssignment: any) => {
-          const branchName = branchAssignment.branchName
-          const employees = branchAssignment.employees || []
+      const scheduleDate = schedule?.scheduleFor || schedule?.date
+      if (!scheduleDate) return
 
-          if (!allocationMap.has(branchName)) {
-            allocationMap.set(branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
+      const rows = getScheduledEmployeesFromSchedule(schedule)
+      const seenForDayBranch = new Set<string>()
+
+      rows.forEach((emp) => {
+        const dedupeKey = `${emp.employeeId}_${emp.branchName}_${scheduleDate}`
+        if (seenForDayBranch.has(dedupeKey)) return
+        seenForDayBranch.add(dedupeKey)
+
+        const branchName = emp.branchName || "Unassigned"
+        if (!allocationMap.has(branchName)) {
+          allocationMap.set(branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
+        }
+
+        const branchData = allocationMap.get(branchName)!
+        const employeeRecord = crews.find((c: any) => String(c.id) === emp.employeeId)
+
+        if (employeeRecord) {
+          if (employeeRecord.type === "full-time") {
+            branchData.fullTime++
+          } else if (employeeRecord.type === "part-time") {
+            branchData.partTime++
           }
+        }
 
-          const branchData = allocationMap.get(branchName)!
-
-          employees.forEach((emp: any) => {
-            const empId = String(emp.employeeId)
-            const employeeRecord = crews.find((c: any) => String(c.id) === empId)
-
-            if (employeeRecord) {
-              if (employeeRecord.type === "full-time") {
-                branchData.fullTime++
-              } else if (employeeRecord.type === "part-time") {
-                branchData.partTime++
-              }
-            }
-
-            branchData.total++
-            // Use real attendance data instead of always-true isPresent
-            const realStatus = attendanceLookup[`${empId}_${scheduleDate}`]
-            if (realStatus === 'present') {
-              branchData.presentCount++
-            }
-          })
-        })
-      }
+        branchData.total++
+        const realStatus = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
+        if (realStatus === "present") {
+          branchData.presentCount++
+        }
+      })
     })
 
     // Convert map to array and calculate attendance rate
@@ -526,20 +566,18 @@ export default function ReportsPage() {
           return targetDate === dateISO
         })
 
-        if (daySchedule && daySchedule.branchAssignments) {
+        if (daySchedule) {
           // Count real attendance from daily_attendance table
           let present = 0
           let absent = 0
-          daySchedule.branchAssignments.forEach((branch: any) => {
-            const employees = branch.employees || []
-            employees.forEach((emp: any) => {
-              const realStatus = attendanceLookup[`${emp.employeeId}_${dateISO}`]
-              if (realStatus === 'present') {
-                present++
-              } else {
-                absent++
-              }
-            })
+          const employees = getScheduledEmployeesFromSchedule(daySchedule)
+          employees.forEach((emp: any) => {
+            const realStatus = attendanceLookup[`${emp.employeeId}_${dateISO}`]
+            if (realStatus === "present") {
+              present++
+            } else {
+              absent++
+            }
           })
           presentData.push(present)
           absentData.push(absent)
@@ -578,31 +616,28 @@ export default function ReportsPage() {
 
       // Scan all schedules to find weeks with attendance
       weekSchedules.forEach((schedule: any) => {
-        if (schedule && schedule.branchAssignments) {
-          const schedDateStr = schedule.scheduleFor || schedule.date
-          const scheduleDate = new Date(schedDateStr + "T00:00:00")
-          const weekStart = getWeekStart(scheduleDate)
-          const weekLabel = `Week ${format(weekStart, "w")} (${format(weekStart, "MMM d")})`
-          const weekKey = weekLabel
+        const schedDateStr = schedule?.scheduleFor || schedule?.date
+        if (!schedDateStr) return
 
-          if (!weeksMap.has(weekKey)) {
-            weeksMap.set(weekKey, { label: weekLabel, present: 0, absent: 0, date: weekStart })
-          }
+        const scheduleDate = new Date(schedDateStr + "T00:00:00")
+        const weekStart = getWeekStart(scheduleDate)
+        const weekLabel = `Week ${format(weekStart, "w")} (${format(weekStart, "MMM d")})`
+        const weekKey = weekLabel
 
-          // Count real attendance for this day
-          const weekData = weeksMap.get(weekKey)!
-          schedule.branchAssignments.forEach((branch: any) => {
-            const employees = branch.employees || []
-            employees.forEach((emp: any) => {
-              const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
-              if (realStatus === 'present') {
-                weekData.present++
-              } else {
-                weekData.absent++
-              }
-            })
-          })
+        if (!weeksMap.has(weekKey)) {
+          weeksMap.set(weekKey, { label: weekLabel, present: 0, absent: 0, date: weekStart })
         }
+
+        const weekData = weeksMap.get(weekKey)!
+        const rows = getScheduledEmployeesFromSchedule(schedule)
+        rows.forEach((emp: any) => {
+          const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+          if (realStatus === "present") {
+            weekData.present++
+          } else {
+            weekData.absent++
+          }
+        })
       })
 
       // Generate 4 latest weeks (whether they have data or not)
@@ -666,23 +701,21 @@ export default function ReportsPage() {
 
     // Aggregate real attendance data from all schedules grouped by month
     weekSchedules.forEach((schedule: any) => {
-      if (schedule && schedule.branchAssignments) {
-        const schedDateStr = schedule.scheduleFor || schedule.date
-        const scheduleDate = new Date(schedDateStr + "T00:00:00")
-        const monthIndex = scheduleDate.getMonth() // 0-11
+      const schedDateStr = schedule?.scheduleFor || schedule?.date
+      if (!schedDateStr) return
 
-        schedule.branchAssignments.forEach((branch: any) => {
-          const employees = branch.employees || []
-          employees.forEach((emp: any) => {
-            const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
-            if (realStatus === 'present') {
-              monthPresentData[monthIndex]++
-            } else {
-              monthAbsentData[monthIndex]++
-            }
-          })
-        })
-      }
+      const scheduleDate = new Date(schedDateStr + "T00:00:00")
+      const monthIndex = scheduleDate.getMonth() // 0-11
+      const rows = getScheduledEmployeesFromSchedule(schedule)
+
+      rows.forEach((emp: any) => {
+        const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+        if (realStatus === "present") {
+          monthPresentData[monthIndex]++
+        } else {
+          monthAbsentData[monthIndex]++
+        }
+      })
     })
 
     return {
@@ -928,58 +961,51 @@ export default function ReportsPage() {
             )}
           </div>
 
-          {/* Branch-wise attendance logs */}
-          <div className="space-y-6">
-            {attendanceHistory.map((branch: any) => (
-              <div key={branch.branchName} className="border rounded-lg overflow-hidden">
-                <div className="bg-muted/50 p-3 flex justify-between items-center">
-                  <h3 className="font-medium">{branch.branchName}</h3>
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant="outline"
-                      className="bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"
-                    >
-                      {branch.presentCount} Present
-                    </Badge>
-                    <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300">
-                      {branch.absentCount} Absent
-                    </Badge>
-                  </div>
-                </div>
+          {/* Unified attendance logs (not grouped by branch) */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="bg-muted/50 p-3">
+              <h3 className="font-medium">Employee Attendance Logs</h3>
+            </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-muted/50 border-b">
-                      <tr>
-                        <th className="text-left px-4 py-2 font-medium text-sm">Name</th>
-                        <th className="text-left px-4 py-2 font-medium text-sm">Days Present</th>
-                        <th className="text-left px-4 py-2 font-medium text-sm">Status</th>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-muted/50 border-b">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-medium text-sm">Name</th>
+                    <th className="text-left px-4 py-2 font-medium text-sm">Days Present</th>
+                    <th className="text-left px-4 py-2 font-medium text-sm">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {attendanceHistory.length > 0 ? (
+                    attendanceHistory.map((employee: any) => (
+                      <tr
+                        key={employee.id}
+                        className={employee.wasPresent ? "bg-green-50 dark:bg-green-950/20" : "bg-red-50 dark:bg-red-950/20"}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="font-medium">{employee.displayName || `${employee.firstName || ""} ${employee.surname || ""}`.trim()}</div>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-muted-foreground">
+                          {employee.presentDays || 0}/{employee.totalDays || 7}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={employee.wasPresent ? "default" : "destructive"}>
+                            {employee.wasPresent ? "Present" : "Absent"}
+                          </Badge>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {branch.employees.map((employee: any) => (
-                        <tr
-                          key={employee.id}
-                          className={employee.wasPresent ? "bg-green-50 dark:bg-green-950/20" : "bg-red-50 dark:bg-red-950/20"}
-                        >
-                          <td className="px-4 py-3">
-                            <div className="font-medium">{employee.firstName} {employee.surname}</div>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {employee.presentDays || 0}/{employee.totalDays || 7}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge variant={employee.wasPresent ? "default" : "destructive"}>
-                              {employee.wasPresent ? "Present" : "Absent"}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                        No scheduled attendance data for this week.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </TabsContent>
 

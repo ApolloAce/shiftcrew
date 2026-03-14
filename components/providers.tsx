@@ -20,6 +20,48 @@ export function Providers({ children }: ProvidersProps) {
     return () => setMounted(false)
   }, [])
 
+  useEffect(() => {
+    const reloadKey = "chunk-reload-attempted"
+
+    const shouldReloadForChunkError = (msg: string) => {
+      const text = msg.toLowerCase()
+      return text.includes("chunkloaderror") || (text.includes("failed to load chunk") && text.includes("/_next/static/chunks"))
+    }
+
+    const reloadOnce = () => {
+      if (sessionStorage.getItem(reloadKey) === "1") return
+      sessionStorage.setItem(reloadKey, "1")
+      window.location.reload()
+    }
+
+    const onWindowError = (event: ErrorEvent) => {
+      const msg = event.message || event.error?.message || ""
+      if (shouldReloadForChunkError(msg)) {
+        reloadOnce()
+      }
+    }
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason
+      const msg =
+        (typeof reason === "string" ? reason : "") ||
+        reason?.message ||
+        reason?.toString?.() ||
+        ""
+      if (shouldReloadForChunkError(msg)) {
+        reloadOnce()
+      }
+    }
+
+    window.addEventListener("error", onWindowError)
+    window.addEventListener("unhandledrejection", onUnhandledRejection)
+
+    return () => {
+      window.removeEventListener("error", onWindowError)
+      window.removeEventListener("unhandledrejection", onUnhandledRejection)
+    }
+  }, [])
+
   if (!mounted) {
     return null
   }
