@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
@@ -21,6 +20,7 @@ import {
   deleteEmployee,
   type Employee,
 } from "@/lib/firestore-employee-service"
+import { getTodayAttendance } from "@/lib/firestore-attendance-service"
 
 export default function EmployeesPage() {
   // Wrap the entire component in an error boundary
@@ -31,32 +31,113 @@ export default function EmployeesPage() {
   )
 }
 
+type EditEmployeeDialogProps = {
+  employee: Employee
+  isProcessing: boolean
+  onCancel: () => void
+  onSave: (updatedEmployee: any) => Promise<void>
+}
+
+function EditEmployeeDialogContent({ employee, isProcessing, onCancel, onSave }: EditEmployeeDialogProps) {
+  const [form, setForm] = useState<any>({ ...employee })
+  const [mode, setMode] = useState<"full-time" | "part-time">((employee.type || "full-time") as "full-time" | "part-time")
+
+  return (
+    <div className="space-y-6 py-4">
+      <div className="flex justify-center gap-4">
+        <Button variant={mode === "full-time" ? "default" : "outline"} onClick={() => setMode("full-time")}>
+          Full-Time
+        </Button>
+        <Button variant={mode === "part-time" ? "default" : "outline"} onClick={() => setMode("part-time")}>
+          Part-Time
+        </Button>
+      </div>
+
+      <div className="space-y-4">
+        <div className="grid gap-2">
+          <Label htmlFor="editFirstName">First Name</Label>
+          <Input
+            id="editFirstName"
+            value={form?.firstName || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, firstName: e.target.value }))}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="editSurname">Surname</Label>
+          <Input
+            id="editSurname"
+            value={form?.surname || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, surname: e.target.value }))}
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="editNickname">Nickname</Label>
+          <Input
+            id="editNickname"
+            value={form?.nickname || ""}
+            onChange={(e) => setForm((prev: any) => ({ ...prev, nickname: e.target.value }))}
+          />
+        </div>
+
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() =>
+            onSave({
+              firstName: form?.firstName || "",
+              surname: form?.surname || "",
+              nickname: form?.nickname || "",
+              type: mode,
+            })
+          }
+          disabled={isProcessing}
+        >
+          {isProcessing ? "Saving..." : "Save Changes"}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function EmployeesContent() {
   const { showNotification } = useNotification()
   const { openDialog, closeDialog, openConfirmDialog } = useDialog()
   const [activeTab, setActiveTab] = useState<"active" | "archived">("active")
   const [searchQuery, setSearchQuery] = useState("")
-  const [editingEmployee, setEditingEmployee] = useState<any>(null)
-  const [mode, setMode] = useState<"full-time" | "part-time">("full-time")
   const [isProcessing, setIsProcessing] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [activeCrews, setActiveCrews] = useState<Employee[]>([])
   const [archivedCrews, setArchivedCrews] = useState<Employee[]>([])
+  const [todayAttendance, setTodayAttendance] = useState<Record<string, boolean>>({})
 
-  // Fetch employees from Firestore
+  // Fetch employees and today's attendance from MySQL
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
         setIsLoading(true)
-        console.log("Fetching employees from Firestore...")
-        const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
-        console.log("Active employees:", active)
-        console.log("Archived employees:", archived)
+        const [active, archived, attendance] = await Promise.all([
+          getActiveEmployees(),
+          getArchivedEmployees(),
+          getTodayAttendance(),
+        ])
         setActiveCrews(active)
         setArchivedCrews(archived)
+
+        // Build a lookup: employeeId -> true/false based on daily_attendance
+        const attendanceMap: Record<string, boolean> = {}
+        for (const rec of attendance) {
+          attendanceMap[rec.employeeId] = rec.status === "present"
+        }
+        setTodayAttendance(attendanceMap)
         
         if (active.length === 0 && archived.length === 0) {
-          showNotification("info", "No Employees", "No employees found. Make sure there are users with role 'employee' in the Firebase 'users' collection.")
+          showNotification("info", "No Employees", "No employees found in the database.")
         }
       } catch (error) {
         console.error("Error fetching employees:", error)
@@ -68,6 +149,11 @@ function EmployeesContent() {
 
     fetchEmployees()
   }, [showNotification])
+
+  // Helper: check attendance from daily_attendance table (not users.isPresent)
+  const isEmployeePresent = (employeeId: string) => {
+    return todayAttendance[employeeId] === true
+  }
 
   // Filter crews based on search query
   const filteredActiveCrews = activeCrews.filter((crew) => {
@@ -85,136 +171,40 @@ function EmployeesContent() {
       if (isProcessing) return
 
       try {
-        setEditingEmployee({ ...employee })
-        setMode((employee.type || "full-time") as "full-time" | "part-time")
-
         openDialog(
-          <div className="space-y-6 py-4">
-            <div className="flex justify-center gap-4">
-              <Button variant={mode === "full-time" ? "default" : "outline"} onClick={() => setMode("full-time")}>
-                Full-Time
-              </Button>
-              <Button variant={mode === "part-time" ? "default" : "outline"} onClick={() => setMode("part-time")}>
-                Part-Time
-              </Button>
-            </div>
+          <EditEmployeeDialogContent
+            employee={employee}
+            isProcessing={isProcessing}
+            onCancel={closeDialog}
+            onSave={async (updatedEmployee) => {
+              setIsProcessing(true)
+              try {
+                await updateEmployee(employee.id, updatedEmployee)
+                closeDialog()
 
-            <div className="space-y-4">
-              <div className="grid gap-2">
-                <Label htmlFor="editFirstName">First Name</Label>
-                <Input
-                  id="editFirstName"
-                  value={editingEmployee?.firstName || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      firstName: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+                // Refresh the employee list
+                const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
+                setActiveCrews(active)
+                setArchivedCrews(archived)
 
-              <div className="grid gap-2">
-                <Label htmlFor="editSurname">Surname</Label>
-                <Input
-                  id="editSurname"
-                  value={editingEmployee?.surname || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      surname: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="editNickname">Nickname</Label>
-                <Input
-                  id="editNickname"
-                  value={editingEmployee?.nickname || ""}
-                  onChange={(e) =>
-                    setEditingEmployee((prev: any) => ({
-                      ...prev,
-                      nickname: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              {mode === "part-time" && (
-                <div className="grid gap-2">
-                  <Label>Availability</Label>
-                  <div className="grid grid-cols-7 gap-2">
-                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
-                      <div key={day} className="flex flex-col items-center">
-                        <span className="text-sm">{day}</span>
-                        <Checkbox
-                          checked={editingEmployee?.availability?.includes(day)}
-                          onCheckedChange={(checked) => {
-                            if (!editingEmployee) return
-                            const availability = [...(editingEmployee.availability || [])]
-                            if (checked) {
-                              if (!availability.includes(day)) {
-                                availability.push(day)
-                              }
-                            } else {
-                              const index = availability.indexOf(day)
-                              if (index !== -1) {
-                                availability.splice(index, 1)
-                              }
-                            }
-                            setEditingEmployee((prev: any) => ({
-                              ...prev,
-                              availability,
-                            }))
-                          }}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={closeDialog}>
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  if (editingEmployee) {
-                    setIsProcessing(true)
-                    try {
-                      const updatedEmployee = { ...editingEmployee, type: mode }
-                      await updateEmployee(editingEmployee.id, updatedEmployee)
-                      closeDialog()
-
-                      // Refresh the employee list
-                      const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])
-                      setActiveCrews(active)
-                      setArchivedCrews(archived)
-
-                      const employeeName = `${updatedEmployee.firstName} ${updatedEmployee.surname}`
-                      showNotification(
-                        "success",
-                        "Employee Updated",
-                        `${employeeName}'s information has been updated successfully.`,
-                      )
-                    } catch (error) {
-                      console.error("Error updating employee:", error)
-                      showNotification("error", "Error", "Failed to update employee")
-                    } finally {
-                      setIsProcessing(false)
-                    }
-                  }
-                }}
-                disabled={isProcessing}
-              >
-                {isProcessing ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          </div>,
+                const employeeName = `${updatedEmployee.firstName} ${updatedEmployee.surname}`
+                showNotification(
+                  "success",
+                  "Employee Updated",
+                  `${employeeName}'s information has been updated successfully.`,
+                )
+              } catch (error) {
+                console.error("Error updating employee:", error)
+                showNotification(
+                  "error",
+                  "Error",
+                  error instanceof Error ? `Failed to update employee: ${error.message}` : "Failed to update employee",
+                )
+              } finally {
+                setIsProcessing(false)
+              }
+            }}
+          />,
           "Edit Employee",
         )
       } catch (error) {
@@ -222,7 +212,7 @@ function EmployeesContent() {
         showNotification("error", "Error", "Failed to open edit dialog")
       }
     },
-    [openDialog, closeDialog, showNotification, mode, editingEmployee, isProcessing],
+    [openDialog, closeDialog, showNotification, isProcessing],
   )
 
   const handleArchiveClick = useCallback(
@@ -377,27 +367,25 @@ function EmployeesContent() {
   const EmployeeList = ({ employees, isArchived = false }: { employees: Employee[]; isArchived?: boolean }) => (
     <div className="rounded-md border overflow-x-auto">
       <div className="min-w-[800px]">
-        <div className="grid grid-cols-5 p-4 font-medium bg-muted/50">
+        <div className="grid grid-cols-4 p-4 font-medium bg-muted/50">
           <div>Name</div>
           <div>Type</div>
           <div>Status</div>
-          <div>Branch</div>
           <div>Actions</div>
         </div>
 
         {employees.length > 0 ? (
           employees.map((employee) => (
-            <div key={employee.id} className="grid grid-cols-5 p-4 border-t items-center">
+            <div key={employee.id} className="grid grid-cols-4 p-4 border-t items-center">
               <div className="font-medium">
                 {employee.firstName} {employee.surname}
               </div>
               <div>{employee.type || "Not specified"}</div>
               <div>
-                <Badge variant={employee.isPresent ? "default" : "destructive"}>
-                  {employee.isPresent ? "Present" : "Absent"}
+                <Badge variant={isEmployeePresent(employee.id) ? "default" : "destructive"}>
+                  {isEmployeePresent(employee.id) ? "Present" : "Absent"}
                 </Badge>
               </div>
-              <div>{employee.branchId ? employee.branchId : "Unassigned"}</div>
               <div className="flex gap-2">
                 {!isArchived ? (
                   <>

@@ -31,7 +31,8 @@ export default function EditBranchDialog({ initialBranch, onSave, onCancel }: Ed
     if (!editData.branchName || !editData.address) {
       return
     }
-    onSave(editData)
+    // Only send editable fields to prevent backend SQL errors from extra fields
+    onSave({ id: editData.id, branchName: editData.branchName, address: editData.address })
   }, [editData, onSave])
 
   return (

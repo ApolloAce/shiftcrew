@@ -1,11 +1,11 @@
-import { db } from "./firebase"
-import { collection, addDoc, getDocs, query, where, updateDoc, doc, deleteDoc } from "firebase/firestore"
+// MySQL-backed schedule service — calls /api/schedules
 
 // Employee details within a branch assignment
 export type BranchEmployee = {
   employeeId: string
-  employeeName?: string // firstName and surname combined
+  employeeName?: string
   isPresent: boolean
+  isManual?: boolean
   shift?: string
 }
 
@@ -19,9 +19,9 @@ export type BranchAssignment = {
 // Legacy flat assignment type (for backward compatibility)
 export type ScheduleAssignment = {
   employeeId: string
-  employeeName?: string // firstName and surname combined
+  employeeName?: string
   branchId: string
-  branchName?: string // Branch name for readability
+  branchName?: string
   isPresent: boolean
   shift?: string
 }
@@ -30,191 +30,57 @@ export type Schedule = {
   id?: string
   date: string
   time: string
-  scheduleFor?: string // Explicit date this schedule is for (YYYY-MM-DD)
-  branchNames?: string[] // Array of branch names included in this schedule (deprecated)
-  assignments?: ScheduleAssignment[] // Legacy flat array (deprecated, kept for backward compatibility)
-  branchAssignments?: BranchAssignment[] // New organized structure: employees grouped by branch
+  scheduleFor?: string
+  branchNames?: string[]
+  assignments?: ScheduleAssignment[]
+  branchAssignments?: BranchAssignment[]
   weekStart?: string
   weekEnd?: string
-  manuallyScheduled?: boolean // Flag to indicate this was manually scheduled (not from auto-rotation)
+  manuallyScheduled?: boolean
   createdAt?: string
   updatedAt?: string
 }
 
-const SCHEDULES_COLLECTION = "schedules"
+const API = "/api/schedules"
 
-// Helper function to group flat assignments by branch
-const groupAssignmentsByBranch = (assignments: ScheduleAssignment[]): BranchAssignment[] => {
-  const branchMap = new Map<string, BranchAssignment>()
-  
-  for (const assignment of assignments) {
-    const branchId = assignment.branchId
-    const branchName = assignment.branchName || branchId
-    
-    if (!branchMap.has(branchId)) {
-      branchMap.set(branchId, {
-        branchId,
-        branchName,
-        employees: []
-      })
-    }
-    
-    branchMap.get(branchId)!.employees.push({
-      employeeId: assignment.employeeId,
-      employeeName: assignment.employeeName,
-      isPresent: assignment.isPresent,
-      shift: assignment.shift
-    })
-  }
-  
-  return Array.from(branchMap.values())
+async function apiFetch(url: string, init?: RequestInit) {
+  const res = await fetch(url, init)
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`)
+  return res.json()
 }
 
-// Add/create a new schedule with all assignments
-// Add or replace schedule for a given date. If a schedule already exists for the same date,
-// update the first found document and remove any duplicates so only the latest remains.
+// Add or replace schedule for a given date
 export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | "updatedAt">): Promise<string> => {
-  try {
-    // Debug info: log invocation and environment project id
-    try {
-      console.log("addSchedule called for date:", schedule.date, "assignments:", schedule.assignments?.length)
-      console.log("NEXT_PUBLIC_FIREBASE_PROJECT_ID:", process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID)
-    } catch (e) {
-      // ignore
-    }
-    // Find existing schedules for the same date
-    // If scheduleFor is provided (new format), query by both date and scheduleFor to uniquely identify each day
-    // Otherwise, fall back to querying by date only (legacy behavior)
-    let q
-    if ((schedule as any).scheduleFor) {
-      q = query(
-        collection(db, SCHEDULES_COLLECTION),
-        where("date", "==", schedule.date),
-        where("scheduleFor", "==", (schedule as any).scheduleFor)
-      )
-    } else {
-      q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", schedule.date))
-    }
-    const snap = await getDocs(q)
-
-    // Group assignments by branch for organized storage
-    const branchAssignments = schedule.assignments
-      ? groupAssignmentsByBranch(schedule.assignments)
-      : []
-
-    // Build the schedule data with organized branch assignments
-    // Exclude branchNames and flat assignments from saved data
-    const scheduleData: any = {
-      date: schedule.date,
-      time: schedule.time,
-      branchAssignments, // Employees grouped by branch
-    }
-
-    // Include optional week range metadata if provided (weekStart/weekEnd/scheduleFor)
-    if ((schedule as any).weekStart) scheduleData.weekStart = (schedule as any).weekStart
-    if ((schedule as any).weekEnd) scheduleData.weekEnd = (schedule as any).weekEnd
-    if ((schedule as any).scheduleFor) scheduleData.scheduleFor = (schedule as any).scheduleFor
-
-    if (!snap.empty) {
-      console.log(`Found existing schedules for date=${schedule.date}, count=${snap.docs.length}`)
-      // Update the first found document with the new schedule data
-      const first = snap.docs[0]
-      const firstRef = doc(db, SCHEDULES_COLLECTION, first.id)
-      await updateDoc(firstRef, {
-        ...scheduleData,
-        updatedAt: new Date().toISOString(),
-      })
-
-      // Delete any additional duplicate documents for the same date
-      if (snap.docs.length > 1) {
-        for (let i = 1; i < snap.docs.length; i++) {
-          try {
-            await deleteDoc(doc(db, SCHEDULES_COLLECTION, snap.docs[i].id))
-          } catch (e) {
-            console.warn(`Could not delete duplicate schedule ${snap.docs[i].id}:`, e)
-          }
-        }
-      }
-
-      console.log(`✓ Schedule updated (replaced) for date: ${schedule.date} (id=${first.id})`)
-      return first.id
-    }
-
-    // No existing schedule for this date — create a new one
-    const docRef = await addDoc(collection(db, SCHEDULES_COLLECTION), {
-      ...scheduleData,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })
-    console.log(`✓ Schedule saved: ${docRef.id}`)
-    return docRef.id
-  } catch (error) {
-    console.error("❌ Error saving schedule:", error)
-    throw error
-  }
+  const data = await apiFetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(schedule),
+  })
+  return data.id
 }
 
-// Get all schedules for a specific date (do not filter by scheduleFor)
+// Get all schedules for a specific date (queries by scheduleFor, the per-day column)
 export const getSchedulesForDate = async (date: string): Promise<Schedule[]> => {
-  try {
-    const q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", date))
-    const snap = await getDocs(q)
-    // Return all schedules for this date, regardless of scheduleFor
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Schedule))
-  } catch (error) {
-    console.error("❌ Error fetching schedules:", error)
-    throw error
-  }
+  return apiFetch(`${API}?scheduleFor=${date}`)
 }
 
-// Update an existing schedule's assignments (e.g., mark employee as absent/present)
+// Get all schedules for an entire week in a single API call
+export const getSchedulesForWeek = async (weekStart: string): Promise<Schedule[]> => {
+  return apiFetch(`${API}?weekStart=${weekStart}`)
+}
+
+// Update an existing schedule's assignments
 export const updateScheduleAssignments = async (scheduleId: string, assignments: ScheduleAssignment[]): Promise<void> => {
-  try {
-    const docRef = doc(db, SCHEDULES_COLLECTION, scheduleId)
-    await updateDoc(docRef, {
-      assignments,
-      updatedAt: new Date().toISOString(),
-    })
-    console.log(`✓ Schedule ${scheduleId} updated`)
-  } catch (error) {
-    console.error("❌ Error updating schedule:", error)
-    throw error
-  }
+  await apiFetch(API, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: scheduleId, assignments }),
+  })
 }
 
-// Delete all schedules for a given week (by weekStart and individual dates)
-export const deleteSchedulesForWeek = async (weekStart: string): Promise<void> => {
-  try {
-    // First, delete by weekStart (for newly saved schedules)
-    let q = query(collection(db, SCHEDULES_COLLECTION), where("weekStart", "==", weekStart))
-    let snap = await getDocs(q)
-    
-    for (const doc_snap of snap.docs) {
-      await deleteDoc(doc(db, SCHEDULES_COLLECTION, doc_snap.id))
-    }
-    
-    console.log(`✓ Deleted ${snap.docs.length} schedules by weekStart for week starting ${weekStart}`)
-
-    // Also delete by each individual date in the week (to catch old schedules without weekStart field)
-    const startDate = new Date(weekStart + "T00:00:00")
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(startDate)
-      d.setDate(startDate.getDate() + i)
-      const iso = d.toISOString().split("T")[0]
-      
-      q = query(collection(db, SCHEDULES_COLLECTION), where("date", "==", iso))
-      snap = await getDocs(q)
-      
-      for (const doc_snap of snap.docs) {
-        await deleteDoc(doc(db, SCHEDULES_COLLECTION, doc_snap.id))
-      }
-      
-      if (snap.docs.length > 0) {
-        console.log(`✓ Deleted ${snap.docs.length} schedules for date ${iso}`)
-      }
-    }
-  } catch (error) {
-    console.error("❌ Error deleting schedules for week:", error)
-    throw error
-  }
+// Delete all schedules for a given week (optionally preserve manually scheduled ones)
+export const deleteSchedulesForWeek = async (weekStart: string, preserveManual?: boolean): Promise<void> => {
+  const params = new URLSearchParams({ weekStart })
+  if (preserveManual) params.set("preserveManual", "true")
+  await apiFetch(`${API}?${params.toString()}`, { method: "DELETE" })
 }

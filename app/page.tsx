@@ -34,15 +34,21 @@ export default function LoginPage() {
     // Check if user is already logged in
     const savedUser = localStorage.getItem("shiftmateUser")
     if (savedUser) {
-      const userData = JSON.parse(savedUser)
-      if (userData.isAdmin) {
-        // Admin user
-        router.push("/dashboard")
-        return
-      } else if (userData.isEmployee) {
-        // Employee user
-        router.push("/employee")
-        return
+      try {
+        const userData = JSON.parse(savedUser)
+        if (userData?.isAdmin) {
+          // Admin user
+          router.push("/dashboard")
+          return
+        }
+        if (userData?.isEmployee) {
+          // Employee user
+          router.push("/employee")
+          return
+        }
+      } catch {
+        // Corrupted persisted user data should not crash login page.
+        localStorage.removeItem("shiftmateUser")
       }
     }
   }, [router])
@@ -94,7 +100,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-secondary-50 to-secondary-200 p-4">
       <Card className="w-full max-w-md shadow-xl transition-transform duration-300 hover:-translate-y-1 border-primary-200">
         <CardHeader className="text-center space-y-1 bg-primary text-primary-foreground rounded-t-lg">
-          <CardTitle className="text-4xl font-bold">ShiftMate</CardTitle>
+          <CardTitle className="text-4xl font-bold">ShiftCrew</CardTitle>
           <CardDescription className="text-lg text-primary-foreground/90">Crew Management System</CardDescription>
         </CardHeader>
 
@@ -152,16 +158,7 @@ export default function LoginPage() {
           </form>
         </CardContent>
 
-        <CardFooter className="flex flex-col border-t border-primary-200 pt-6 bg-secondary-50 rounded-b-lg">
-          <div className="text-sm text-muted-foreground">
-            <p className="font-medium mb-2">Demo Accounts:</p>
-            <ul className="list-disc pl-5 space-y-1">
-              <li>Admin: admin / admin123</li>
-              <li>Manager: manager / manager123</li>
-              <li>Employee: luis / luis123</li>
-            </ul>
-          </div>
-        </CardFooter>
+
       </Card>
     </div>
   )

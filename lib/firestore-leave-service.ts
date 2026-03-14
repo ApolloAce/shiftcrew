@@ -1,9 +1,9 @@
-import { db } from "./firebase"
-import { collection, getDocs, query, where, addDoc, updateDoc, doc } from "firebase/firestore"
+// MySQL-backed leave service — calls /api/leave
 
 export type LeaveRequest = {
-  id?: string | number
-  crewId: number
+  id?: string
+  employeeId: string
+  employeeName?: string
   startDate: string
   endDate: string
   reason?: string
@@ -12,53 +12,51 @@ export type LeaveRequest = {
   notes?: string
   createdAt?: string
   reviewedAt?: string
-  reviewedBy?: number
+  reviewedBy?: string
 }
 
-const LEAVE_COLLECTION = "leaveRequests"
+const API = "/api/leave"
+
+async function apiFetch(url: string, init?: RequestInit) {
+  const res = await fetch(url, init)
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`)
+  return res.json()
+}
 
 export const getAllLeaveRequests = async (): Promise<LeaveRequest[]> => {
-  try {
-    const q = query(collection(db, LEAVE_COLLECTION))
-    const snap = await getDocs(q)
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as LeaveRequest))
-  } catch (error) {
-    console.error("Error fetching leave requests:", error)
-    throw error
-  }
+  return apiFetch(API)
 }
 
-export const getLeaveRequestsForCrew = async (crewId: number): Promise<LeaveRequest[]> => {
-  try {
-    const q = query(collection(db, LEAVE_COLLECTION), where("crewId", "==", crewId))
-    const snap = await getDocs(q)
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as LeaveRequest))
-  } catch (error) {
-    console.error("Error fetching leave requests for crew:", error)
-    throw error
-  }
+export const getPendingLeaveRequests = async (): Promise<LeaveRequest[]> => {
+  return apiFetch(`${API}?status=pending`)
 }
 
-export const addLeaveRequest = async (request: Omit<LeaveRequest, "id" | "createdAt" | "status"> & { status?: string }) => {
-  try {
-    const docRef = await addDoc(collection(db, LEAVE_COLLECTION), {
-      ...request,
-      status: (request as any).status || "pending",
-      createdAt: new Date().toISOString(),
-    })
-    return docRef.id
-  } catch (error) {
-    console.error("Error adding leave request:", error)
-    throw error
-  }
+export const getLeaveRequestsForEmployee = async (employeeId: string): Promise<LeaveRequest[]> => {
+  return apiFetch(`${API}?employeeId=${employeeId}`)
+}
+
+export const addLeaveRequest = async (request: Omit<LeaveRequest, "id" | "createdAt"> & { status?: string }) => {
+  const data = await apiFetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  })
+  return data.id
 }
 
 export const updateLeaveRequest = async (id: string, data: Partial<LeaveRequest>) => {
-  try {
-    const ref = doc(db, LEAVE_COLLECTION, id)
-    await updateDoc(ref, { ...data, reviewedAt: new Date().toISOString() })
-  } catch (error) {
-    console.error("Error updating leave request:", error)
-    throw error
-  }
+  await apiFetch(API, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, ...data }),
+  })
+}
+
+// Convenience helpers for approve/reject
+export const approveLeaveRequest = async (id: string, reviewedBy?: string) => {
+  await updateLeaveRequest(id, { status: "approved", reviewedBy: reviewedBy || null } as any)
+}
+
+export const rejectLeaveRequest = async (id: string, notes?: string, reviewedBy?: string) => {
+  await updateLeaveRequest(id, { status: "rejected", notes, reviewedBy: reviewedBy || null } as any)
 }

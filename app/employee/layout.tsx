@@ -9,7 +9,6 @@ import { Bell, Calendar, Clock, FileText, Home, LogOut, Menu, User } from "lucid
 import { cn } from "@/lib/utils"
 import { useMobile } from "@/hooks/use-mobile"
 import { Badge } from "@/components/ui/badge"
-import { useCrewStore } from "@/lib/cleanStore"
 
 interface EmployeeLayoutProps {
   children: React.ReactNode
@@ -19,14 +18,21 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
   const router = useRouter()
   const pathname = usePathname()
   const isMobile = useMobile()
-  const { getNotificationsForCrew } = useCrewStore()
   const [currentUser, setCurrentUser] = useState<{
-    id: number
+    id: number | string
     firstName: string
     surname: string
     type: string
+    branchId?: string | number | null
   } | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
+
+  const refreshBadgeCounts = (userId: string | number) => {
+    fetch(`/api/notifications?recipientId=${userId}&unreadOnly=true`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((notifs) => { if (Array.isArray(notifs)) setUnreadNotifications(notifs.length) })
+      .catch(() => {})
+  }
 
   useEffect(() => {
     // Check if user is logged in
@@ -52,14 +58,26 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
 
       setCurrentUser(userData)
 
-      // Count unread notifications
-      const notifications = getNotificationsForCrew(userData.id)
-      setUnreadNotifications(notifications.filter((n) => !n.isRead).length)
+      // Fetch badge counts
+      if (userData.id) {
+        refreshBadgeCounts(userData.id)
+      }
     } catch (error) {
       console.error("Error parsing user data:", error)
       router.push("/")
     }
-  }, [router, getNotificationsForCrew])
+  }, [router])
+
+  // Listen for custom events to refresh badge counts
+  useEffect(() => {
+    const handleBadgeRefresh = () => {
+      if (currentUser?.id) refreshBadgeCounts(currentUser.id)
+    }
+    window.addEventListener("notifications-updated", handleBadgeRefresh)
+    return () => {
+      window.removeEventListener("notifications-updated", handleBadgeRefresh)
+    }
+  }, [currentUser])
 
   const handleLogout = () => {
     sessionStorage.removeItem("currentUser")
@@ -121,7 +139,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
           <SheetContent side="left" className="w-64 p-4 bg-primary text-primary-foreground">
             <div className="flex flex-col h-full">
               <div className="py-4 border-b border-primary-600 mb-4">
-                <h1 className="text-2xl font-bold">ShiftMate</h1>
+                <h1 className="text-2xl font-bold">ShiftCrew</h1>
                 <p className="text-sm text-primary-foreground/80">Employee Portal</p>
               </div>
               <NavLinks />
@@ -147,7 +165,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
       ) : (
         <aside className="fixed inset-y-0 left-0 w-64 border-r border-primary-200 bg-primary p-4 flex flex-col">
           <div className="py-4 border-b border-primary-600 mb-4">
-            <h1 className="text-2xl font-bold text-primary-foreground">ShiftMate</h1>
+            <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
             <p className="text-sm text-primary-foreground/80">Employee Portal</p>
           </div>
           <NavLinks />

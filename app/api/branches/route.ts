@@ -1,0 +1,95 @@
+import { NextResponse } from "next/server";
+import { query, execute, mysqlNow } from "@/lib/mysql";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+// GET /api/branches?id=xxx
+export async function GET(req: Request) {
+  try {
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
+
+    if (id) {
+      const rows = await query("SELECT * FROM branches WHERE id = ?", [id]);
+      if (rows.length === 0) return NextResponse.json(null, { status: 404 });
+      return NextResponse.json(rows[0]);
+    }
+
+    const rows = await query("SELECT * FROM branches ORDER BY branchName");
+    return NextResponse.json(rows);
+  } catch (error: any) {
+    console.error("GET /api/branches error:", error);
+    return NextResponse.json({ message: "Server error" }, { status: 500 });
+  }
+}
+
+// POST /api/branches
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const id = crypto.randomUUID();
+
+    await execute(
+      `INSERT INTO branches (id, branchName, address, latitude, longitude, city, province, radius)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        body.branchName,
+        body.address || null,
+        body.latitude ?? null,
+        body.longitude ?? null,
+        body.city || null,
+        body.province || null,
+        body.radius ?? 100,
+      ]
+    );
+
+    return NextResponse.json({ id }, { status: 201 });
+  } catch (error: any) {
+    console.error("POST /api/branches error:", error);
+    return NextResponse.json({ message: "Server error" }, { status: 500 });
+  }
+}
+
+// PUT /api/branches
+export async function PUT(req: Request) {
+  try {
+    const body = await req.json();
+    const { id, ...updates } = body;
+    if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
+
+    const setClauses: string[] = [];
+    const params: any[] = [];
+
+    for (const [key, value] of Object.entries(updates)) {
+      setClauses.push(`\`${key}\` = ?`);
+      params.push(value);
+    }
+
+    setClauses.push("updatedAt = ?");
+    params.push(mysqlNow());
+    params.push(id);
+
+    await execute(`UPDATE branches SET ${setClauses.join(", ")} WHERE id = ?`, params);
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("PUT /api/branches error:", error);
+    return NextResponse.json({ message: "Server error" }, { status: 500 });
+  }
+}
+
+// DELETE /api/branches?id=xxx
+export async function DELETE(req: Request) {
+  try {
+    const url = new URL(req.url);
+    const id = url.searchParams.get("id");
+    if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
+
+    await execute("DELETE FROM branches WHERE id = ?", [id]);
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("DELETE /api/branches error:", error);
+    return NextResponse.json({ message: "Server error" }, { status: 500 });
+  }
+}
