@@ -34,15 +34,21 @@ export default function LoginPage() {
     // Check if user is already logged in
     const savedUser = localStorage.getItem("shiftmateUser")
     if (savedUser) {
-      const userData = JSON.parse(savedUser)
-      if (userData.isAdmin) {
-        // Admin user
-        router.push("/dashboard")
-        return
-      } else if (userData.isEmployee) {
-        // Employee user
-        router.push("/employee")
-        return
+      try {
+        const userData = JSON.parse(savedUser)
+        if (userData?.isAdmin) {
+          // Admin user
+          router.push("/dashboard")
+          return
+        }
+        if (userData?.isEmployee) {
+          // Employee user
+          router.push("/employee")
+          return
+        }
+      } catch {
+        // Corrupted persisted user data should not crash login page.
+        localStorage.removeItem("shiftmateUser")
       }
     }
   }, [router])

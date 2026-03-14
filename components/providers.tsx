@@ -1,6 +1,6 @@
 "use client"
 
-import { type ReactNode, useEffect, useState } from "react"
+import { type ReactNode, useEffect } from "react"
 import { ThemeProvider } from "@/components/theme-provider"
 import { NotificationProvider } from "@/components/notification-provider"
 import { DialogProvider } from "@/components/dialog-provider"
@@ -12,14 +12,6 @@ interface ProvidersProps {
 }
 
 export function Providers({ children }: ProvidersProps) {
-  // Use this to ensure providers are only rendered on the client
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-    return () => setMounted(false)
-  }, [])
-
   useEffect(() => {
     const reloadKey = "chunk-reload-attempted"
 
@@ -61,10 +53,6 @@ export function Providers({ children }: ProvidersProps) {
       window.removeEventListener("unhandledrejection", onUnhandledRejection)
     }
   }, [])
-
-  if (!mounted) {
-    return null
-  }
 
   return (
     <ErrorBoundary>

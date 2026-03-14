@@ -19,7 +19,7 @@ if action == "kill":
 elif action == "force":
     # Safer force: do not kill an active build; ensure build artifacts exist before PM2 restart.
     print("Checking build status...")
-    i, o, e = c.exec_command("pgrep -f 'next build' || echo NOT_RUNNING", timeout=15)
+    i, o, e = c.exec_command("pgrep -f '[n]ext build' || echo NOT_RUNNING", timeout=15)
     build_status = o.read().decode().strip()
 
     if build_status != "NOT_RUNNING":
@@ -65,7 +65,7 @@ elif action == "restart":
     print(o.read().decode())
 
 elif action == "check":
-    i, o, e = c.exec_command("pgrep -f 'next build' || echo NOT_RUNNING", timeout=10)
+    i, o, e = c.exec_command("pgrep -f '[n]ext build' || echo NOT_RUNNING", timeout=10)
     status = o.read().decode().strip()
     if status == "NOT_RUNNING":
         print("Build finished!")

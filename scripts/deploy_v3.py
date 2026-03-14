@@ -76,7 +76,7 @@ if step == "upload":
 
 elif step == "check":
     # Check if build is still running
-    stdin, stdout, stderr = ssh.exec_command("pgrep -f 'next build' || echo 'NOT_RUNNING'", timeout=10)
+    stdin, stdout, stderr = ssh.exec_command("pgrep -f '[n]ext build' || echo 'NOT_RUNNING'", timeout=10)
     status = stdout.read().decode().strip()
     if status == "NOT_RUNNING":
         print("Build finished!")
