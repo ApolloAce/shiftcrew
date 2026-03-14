@@ -27,6 +27,13 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
   } | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
 
+  const refreshBadgeCounts = (userId: string | number) => {
+    fetch(`/api/notifications?recipientId=${userId}&unreadOnly=true`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((notifs) => { if (Array.isArray(notifs)) setUnreadNotifications(notifs.length) })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     // Check if user is logged in
     const user = sessionStorage.getItem("currentUser")
@@ -50,11 +57,27 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
       }
 
       setCurrentUser(userData)
+
+      // Fetch badge counts
+      if (userData.id) {
+        refreshBadgeCounts(userData.id)
+      }
     } catch (error) {
       console.error("Error parsing user data:", error)
       router.push("/")
     }
   }, [router])
+
+  // Listen for custom events to refresh badge counts
+  useEffect(() => {
+    const handleBadgeRefresh = () => {
+      if (currentUser?.id) refreshBadgeCounts(currentUser.id)
+    }
+    window.addEventListener("notifications-updated", handleBadgeRefresh)
+    return () => {
+      window.removeEventListener("notifications-updated", handleBadgeRefresh)
+    }
+  }, [currentUser])
 
   const handleLogout = () => {
     sessionStorage.removeItem("currentUser")

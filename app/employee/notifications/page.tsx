@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useNotification } from "@/components/notification-provider"
 import { format, parseISO } from "date-fns"
-import { Bell, CheckCircle, AlertCircle, Info, Calendar } from "lucide-react"
+import { Bell, CheckCircle, AlertCircle, Info, Calendar, FileText } from "lucide-react"
 
 export default function EmployeeNotificationsPage() {
   const { showNotification } = useNotification()
@@ -14,6 +14,7 @@ export default function EmployeeNotificationsPage() {
   const [currentUser, setCurrentUser] = useState<{ id: number | string } | null>(null)
   const [notifications, setNotifications] = useState<any[]>([])
   const [upcomingShifts, setUpcomingShifts] = useState<any[]>([])
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   const fetchNotifications = async (userId: string) => {
@@ -42,6 +43,12 @@ export default function EmployeeNotificationsPage() {
 
         // Fetch upcoming shifts from API
         fetchUpcomingShifts(userData)
+
+        // Fetch leave requests
+        fetch(`/api/leave?employeeId=${userData.id}`)
+          .then((r) => r.ok ? r.json() : [])
+          .then((data) => { if (Array.isArray(data)) setLeaveRequests(data) })
+          .catch(() => {})
       }
     } catch (error) {
       console.error("Error loading notifications:", error)
@@ -121,6 +128,7 @@ export default function EmployeeNotificationsPage() {
       })
 
       await fetchNotifications(String(currentUser.id))
+      window.dispatchEvent(new Event("notifications-updated"))
       showNotification("success", "Notification Marked as Read", "The notification has been marked as read.")
     } catch (error) {
       console.error("Error marking notification as read:", error)
@@ -142,6 +150,7 @@ export default function EmployeeNotificationsPage() {
       })
 
       await fetchNotifications(String(currentUser.id))
+      window.dispatchEvent(new Event("notifications-updated"))
       showNotification("success", "All Notifications Marked as Read", "All notifications have been marked as read.")
     } catch (error) {
       console.error("Error marking all notifications as read:", error)
@@ -169,15 +178,15 @@ export default function EmployeeNotificationsPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
           <p className="text-muted-foreground">Stay updated with important announcements and updates</p>
         </div>
 
         {unreadCount > 0 && (
-          <Button variant="outline" onClick={handleMarkAllAsRead} disabled={isLoading}>
-            Mark All as Read
+          <Button variant="outline" onClick={handleMarkAllAsRead} disabled={isLoading} className="w-full sm:w-auto">
+            Mark All as Read ({unreadCount})
           </Button>
         )}
       </div>
@@ -221,6 +230,52 @@ export default function EmployeeNotificationsPage() {
                   </div>
                 )
               })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Leave Request Updates */}
+      {leaveRequests.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center">
+              <FileText className="mr-2 h-5 w-5 text-primary" />
+              Leave Requests
+            </CardTitle>
+
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {leaveRequests
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                .slice(0, 5)
+                .map((lr) => (
+                  <div key={lr.id} className={`p-3 border rounded-md ${
+                    lr.status === "approved" ? "bg-green-50 dark:bg-green-950/20 border-green-200" :
+                    lr.status === "rejected" ? "bg-red-50 dark:bg-red-950/20 border-red-200" :
+                    "bg-amber-50 dark:bg-amber-950/20 border-amber-200"
+                  }`}>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium capitalize">{lr.type || "Leave"} Request</div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          {lr.startDate?.slice(0, 10)} to {lr.endDate?.slice(0, 10)}
+                        </div>
+                        {lr.status === "rejected" && lr.notes && (
+                          <div className="text-sm text-red-600 mt-1">Reason: {lr.notes}</div>
+                        )}
+                      </div>
+                      <Badge className={`${
+                        lr.status === "approved" ? "bg-green-500" :
+                        lr.status === "rejected" ? "bg-red-500" :
+                        "bg-amber-500"
+                      } text-white`}>
+                        {lr.status === "approved" ? "Approved" : lr.status === "rejected" ? "Rejected" : "Pending"}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
             </div>
           </CardContent>
         </Card>

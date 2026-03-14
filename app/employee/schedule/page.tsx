@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, subWeeks, addWeeks } from "date-fns"
-import { ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock } from "lucide-react"
+import { ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock, Palmtree } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 
@@ -38,6 +38,7 @@ export default function EmployeeSchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date())
   const [weekSchedules, setWeekSchedules] = useState<EmployeeShift[]>([])
   const [weekAttendance, setWeekAttendance] = useState<AttendanceRecord[]>([])
+  const [approvedLeaves, setApprovedLeaves] = useState<{ startDate: string; endDate: string }[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -82,15 +83,17 @@ export default function EmployeeSchedulePage() {
     // Clear old data immediately so stale data don't show
     setWeekSchedules([])
     setWeekAttendance([])
+    setApprovedLeaves([])
     setIsLoading(true)
     setError(null)
 
     const fetchData = async () => {
       try {
-        // Fetch both schedules and attendance in parallel
-        const [schedRes, attRes] = await Promise.all([
+        // Fetch schedules, attendance, and leaves in parallel
+        const [schedRes, attRes, leaveRes] = await Promise.all([
           fetch(`/api/schedules?weekStart=${weekStartStr}`),
           fetch(`/api/attendance?employeeId=${currentUser.id}&startDate=${weekStartStr}&endDate=${weekEndStr}`),
+          fetch(`/api/leave?employeeId=${currentUser.id}&status=approved`),
         ])
 
         // --- Parse schedules ---
@@ -156,11 +159,20 @@ export default function EmployeeSchedulePage() {
 
         setWeekSchedules(employeeShifts)
         setWeekAttendance(attendanceRecords)
+
+        // --- Parse leaves ---
+        if (leaveRes.ok) {
+          const leaves = await leaveRes.json()
+          if (Array.isArray(leaves)) {
+            setApprovedLeaves(leaves.map((lv: any) => ({ startDate: lv.startDate, endDate: lv.endDate })))
+          }
+        }
       } catch (error) {
         console.error("Error loading schedule data:", error)
         setError("Failed to load schedule data. Please try again.")
         setWeekSchedules([])
         setWeekAttendance([])
+        setApprovedLeaves([])
       } finally {
         setIsLoading(false)
       }
@@ -226,6 +238,11 @@ export default function EmployeeSchedulePage() {
     return dow === 0 || dow === 6
   }
 
+  const isDayOnLeave = (date: Date) => {
+    const dateStr = format(date, "yyyy-MM-dd")
+    return approvedLeaves.some((lv) => dateStr >= lv.startDate && dateStr <= lv.endDate)
+  }
+
   const getStatusBadge = (attendance: AttendanceRecord | undefined, date: Date) => {
     if (attendance) {
       if (attendance.status === "present") {
@@ -236,8 +253,11 @@ export default function EmployeeSchedulePage() {
       }
       return <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Absent</Badge>
     }
-    // Past day with no attendance = absent (including weekends)
+    // Past day with no attendance — check leave first
     if (isPast(date)) {
+      if (isDayOnLeave(date)) {
+        return <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-[10px] px-1.5 py-0">On Leave</Badge>
+      }
       return <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Absent</Badge>
     }
     return null
@@ -307,6 +327,7 @@ export default function EmployeeSchedulePage() {
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-500" /> Present</span>
         <span className="flex items-center gap-1"><Clock className="h-3 w-3 text-amber-500" /> Undertime</span>
+        <span className="flex items-center gap-1"><Palmtree className="h-3 w-3 text-orange-500" /> On Leave</span>
         <span className="flex items-center gap-1"><XCircle className="h-3 w-3 text-red-500" /> Absent</span>
       </div>
 
@@ -328,6 +349,7 @@ export default function EmployeeSchedulePage() {
               <Card className={`flex-1 border-t-0 rounded-t-none ${
                 attendance?.status === "present" ? "bg-green-50 dark:bg-green-950/20" :
                 attendance?.status === "undertime" ? "bg-amber-50 dark:bg-amber-950/20" :
+                (isPast(day) && !attendance && isDayOnLeave(day)) ? "bg-orange-50 dark:bg-orange-950/20" :
                 (isPast(day) && !attendance) ? "bg-red-50 dark:bg-red-950/10" :
                 ""
               }`}>
@@ -398,6 +420,7 @@ export default function EmployeeSchedulePage() {
                     <div key={idx} className={`flex justify-between items-center p-4 border rounded-md ${
                       attendance?.status === "present" ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" :
                       attendance?.status === "undertime" ? "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800" :
+                      (isPast(day) && !attendance && isDayOnLeave(day)) ? "bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800" :
                       (isPast(day) && !attendance) ? "bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800" :
                       ""
                     }`}>

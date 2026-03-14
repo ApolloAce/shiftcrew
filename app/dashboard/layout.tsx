@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Menu, Users, UserPlus, Building, Calendar, BarChart, FileText, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useMobile } from "@/hooks/use-mobile"
+import { Badge } from "@/components/ui/badge"
 
 interface DashboardLayoutProps {
   children: React.ReactNode
@@ -18,6 +19,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const pathname = usePathname()
   const isMobile = useMobile()
   const [currentUser, setCurrentUser] = useState<{ name: string; role: string } | null>(null)
+  const [pendingLeaveCount, setPendingLeaveCount] = useState(0)
 
   useEffect(() => {
     // Check if user is logged in
@@ -47,11 +49,28 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       }
 
       setCurrentUser(userData)
+
+      // Fetch pending leave count
+      fetchPendingLeaveCount()
     } catch (error) {
       console.error("Error parsing user data:", error)
       router.push("/")
     }
   }, [router])
+
+  const fetchPendingLeaveCount = () => {
+    fetch("/api/leave?status=pending")
+      .then((r) => r.ok ? r.json() : [])
+      .then((leaves) => { if (Array.isArray(leaves)) setPendingLeaveCount(leaves.length) })
+      .catch(() => {})
+  }
+
+  // Listen for custom events to refresh badge count
+  useEffect(() => {
+    const handleLeaveUpdate = () => fetchPendingLeaveCount()
+    window.addEventListener("leave-updated", handleLeaveUpdate)
+    return () => window.removeEventListener("leave-updated", handleLeaveUpdate)
+  }, [])
 
   const handleLogout = () => {
     sessionStorage.removeItem("currentUser")
@@ -65,7 +84,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: "Employee Registration", path: "/dashboard/registration", icon: <UserPlus className="h-5 w-5" /> },
     { name: "Branch Management", path: "/dashboard/branches", icon: <Building className="h-5 w-5" /> },
     { name: "Crew Assignment", path: "/dashboard/scheduling", icon: <Calendar className="h-5 w-5" /> },
-    { name: "Leave Approvals", path: "/dashboard/leave-approvals", icon: <FileText className="h-5 w-5" /> },
+    { name: "Leave Approvals", path: "/dashboard/leave-approvals", icon: <FileText className="h-5 w-5" />, badge: pendingLeaveCount },
     { name: "Absences", path: "/dashboard/absences", icon: <AlertTriangle className="h-5 w-5" /> },
     { name: "Reports", path: "/dashboard/reports", icon: <BarChart className="h-5 w-5" /> },
   ]
@@ -87,6 +106,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <div className="flex items-center gap-3 w-full">
             <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary-600/50">{item.icon}</span>
             <span>{item.name}</span>
+            {(item.badge ?? 0) > 0 && <Badge className="ml-auto bg-red-500 text-white text-xs px-1.5 py-0">{item.badge}</Badge>}
           </div>
         </Button>
       ))}

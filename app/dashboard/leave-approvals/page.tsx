@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -20,6 +20,7 @@ export default function LeaveApprovalsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
   const [rejectionReason, setRejectionReason] = useState("")
+  const rejectionReasonRef = useRef("")
 
   const fetchData = async () => {
     try {
@@ -59,6 +60,7 @@ export default function LeaveApprovalsPage() {
         try {
           await approveLeaveRequest(requestId)
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
+          window.dispatchEvent(new Event("leave-updated"))
           showNotification(
             "success",
             "Leave Request Approved",
@@ -85,11 +87,11 @@ export default function LeaveApprovalsPage() {
             {format(parseISO(request.startDate), "MMM d, yyyy")} to {format(parseISO(request.endDate), "MMM d, yyyy")}?
           </p>
           <div className="space-y-2">
-            <Label htmlFor="rejectionReason">Reason for rejection (optional):</Label>
+            <Label htmlFor="rejectionReason">Reason for rejection:</Label>
             <Textarea
               id="rejectionReason"
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
+              defaultValue=""
+              onChange={(e) => { rejectionReasonRef.current = e.target.value }}
               placeholder="Provide a reason for rejecting this leave request"
               className="resize-none"
             />
@@ -100,14 +102,16 @@ export default function LeaveApprovalsPage() {
       confirmVariant: "bg-red-600 hover:bg-red-700",
       onConfirm: async () => {
         try {
-          await rejectLeaveRequest(requestId, rejectionReason || undefined)
+          const reason = rejectionReasonRef.current.trim()
+          await rejectLeaveRequest(requestId, reason || undefined)
           setPendingRequests((prev) => prev.filter((r) => r.id !== requestId))
+          window.dispatchEvent(new Event("leave-updated"))
           showNotification(
             "info",
             "Leave Request Rejected",
-            `${getEmployeeName(request.employeeId)}'s leave request has been rejected.`,
+            `${getEmployeeName(request.employeeId)}'s leave request has been rejected.${reason ? ` Reason: ${reason}` : ""}`,
           )
-          setRejectionReason("")
+          rejectionReasonRef.current = ""
         } catch (error) {
           console.error("Error rejecting leave request:", error)
           showNotification("error", "Error", "Failed to reject leave request")

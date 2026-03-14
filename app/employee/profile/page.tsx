@@ -25,6 +25,7 @@ export default function EmployeeProfilePage() {
     email: "",
     address: "",
     emergencyContact: "",
+    currentPassword: "",
     password: "",
     confirmPassword: "",
   })
@@ -152,6 +153,11 @@ export default function EmployeeProfilePage() {
   const handleUpdatePassword = async () => {
     if (!currentUser || !employeeData) return
 
+    if (!profileForm.currentPassword) {
+      showNotification("error", "Current Password Required", "Please enter your current password.")
+      return
+    }
+
     if (profileForm.password !== profileForm.confirmPassword) {
       showNotification("error", "Password Mismatch", "The passwords you entered do not match.")
       return
@@ -164,13 +170,28 @@ export default function EmployeeProfilePage() {
 
     setIsLoading(true)
     try {
-      // Note: password update would need a dedicated endpoint with proper hashing
-      showNotification("success", "Password Updated", "Your password has been updated successfully.")
-      setProfileForm((prev) => ({
-        ...prev,
-        password: "",
-        confirmPassword: "",
-      }))
+      const res = await fetch("/api/employees/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: currentUser.id,
+          currentPassword: profileForm.currentPassword,
+          newPassword: profileForm.password,
+        }),
+      })
+
+      if (res.ok) {
+        showNotification("success", "Password Updated", "Your password has been updated successfully.")
+        setProfileForm((prev) => ({
+          ...prev,
+          currentPassword: "",
+          password: "",
+          confirmPassword: "",
+        }))
+      } else {
+        const data = await res.json()
+        showNotification("error", "Error", data.message || "Failed to update password.")
+      }
     } catch (error) {
       console.error("Error updating password:", error)
       showNotification("error", "Error", "Failed to update password. Please try again.")
@@ -311,6 +332,17 @@ export default function EmployeeProfilePage() {
               <TabsContent value="security" className="mt-6">
                 <div className="space-y-4">
                   <div className="space-y-2">
+                    <Label htmlFor="currentPassword">Current Password</Label>
+                    <Input
+                      id="currentPassword"
+                      name="currentPassword"
+                      type="password"
+                      value={profileForm.currentPassword}
+                      onChange={handleInputChange}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
                     <Label htmlFor="password">New Password</Label>
                     <Input
                       id="password"
@@ -334,7 +366,7 @@ export default function EmployeeProfilePage() {
 
                   <Button
                     onClick={handleUpdatePassword}
-                    disabled={isLoading || !profileForm.password || !profileForm.confirmPassword}
+                    disabled={isLoading || !profileForm.currentPassword || !profileForm.password || !profileForm.confirmPassword}
                     className="w-full"
                   >
                     Update Password

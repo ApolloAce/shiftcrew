@@ -7,14 +7,20 @@ PASS = "@Emorej02e"
 REMOTE_DIR = "/var/www/shiftcrew"
 
 files = [
+    "app/dashboard/page.tsx",
     "app/dashboard/scheduling/page.tsx",
+    "app/dashboard/leave-approvals/page.tsx",
     "app/employee/attendance/page.tsx",
     "app/employee/page.tsx",
     "app/employee/schedule/page.tsx",
+    "app/employee/leave/page.tsx",
     "app/employee/notifications/page.tsx",
     "app/api/attendance/validate-location/route.ts",
     "app/api/cron/rotate/route.ts",
     "app/api/cron/post-leave/route.ts",
+    "app/api/leave/route.ts",
+    "app/api/employees/password/route.ts",
+    "app/employee/profile/page.tsx",
     "lib/utils.ts",
     "app/layout.tsx",
     "app/page.tsx",

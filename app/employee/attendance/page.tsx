@@ -45,6 +45,7 @@ export default function EmployeeAttendancePage() {
   // On-leave status
   const [isOnLeave, setIsOnLeave] = useState(false)
   const [leaveEndDate, setLeaveEndDate] = useState<string | null>(null)
+  const [approvedLeaves, setApprovedLeaves] = useState<{ startDate: string; endDate: string }[]>([])
 
   useEffect(() => {
     const user = sessionStorage.getItem("currentUser")
@@ -131,6 +132,8 @@ export default function EmployeeAttendancePage() {
                     setIsOnLeave(true)
                     setLeaveEndDate(activeLeave.endDate)
                   }
+                  // Store all approved leaves for calendar rendering
+                  setApprovedLeaves(leaves.map((lv: any) => ({ startDate: lv.startDate, endDate: lv.endDate })))
                 }
               }
             } catch {}
@@ -416,6 +419,11 @@ export default function EmployeeAttendancePage() {
     })
   }
 
+  const isDayOnLeave = (date: Date) => {
+    const dateStr = format(date, "yyyy-MM-dd")
+    return approvedLeaves.some((lv) => dateStr >= lv.startDate && dateStr <= lv.endDate)
+  }
+
   const LocationModal = ({ isClockIn, show, onClose, onSubmit }: {
     isClockIn: boolean
     show: boolean
@@ -665,6 +673,7 @@ export default function EmployeeAttendancePage() {
                 <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/30 border"></span> Undertime</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-100 dark:bg-orange-900/30 border"></span> On Leave</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
                 </div>
                 <div className="grid grid-cols-7 gap-2">
@@ -702,9 +711,15 @@ export default function EmployeeAttendancePage() {
                         indicator = "✗"
                       }
                     } else if (isPast) {
-                      // Past day with no attendance record = Absent (including weekends)
-                      bgColor = "bg-red-50 dark:bg-red-900/20"
-                      indicator = "✗"
+                      if (isDayOnLeave(day)) {
+                        // Past day on approved leave
+                        bgColor = "bg-orange-100 dark:bg-orange-900/30"
+                        indicator = "L"
+                      } else {
+                        // Past day with no attendance record = Absent
+                        bgColor = "bg-red-50 dark:bg-red-900/20"
+                        indicator = "✗"
+                      }
                     }
 
                     if (isSameDay(day, today)) {
@@ -714,7 +729,7 @@ export default function EmployeeAttendancePage() {
                     return (
                       <div key={i} className={`text-center p-2 rounded-md ${bgColor} ${isFuture ? 'opacity-50' : ''}`}>
                         <div className="text-sm">{format(day, "d")}</div>
-                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : indicator === "⏱" ? "text-amber-600" : "text-red-500"}`}>{indicator}</div>}
+                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : indicator === "⏱" ? "text-amber-600" : indicator === "L" ? "text-orange-500" : "text-red-500"}`}>{indicator}</div>}
                       </div>
                     )
                   })}

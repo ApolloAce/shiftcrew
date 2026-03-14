@@ -229,17 +229,45 @@ export default function DashboardPage() {
   // Group scheduled employees by branch, filtered by search query
   const getScheduledCrewsByBranch = () => {
     const result: Record<string, typeof uniqueScheduledEmployees> = {}
-    if (scheduleData && scheduleData.branchAssignments) {
-      const query = searchQuery.toLowerCase()
+    if (!scheduleData) return result
+
+    const query = searchQuery.toLowerCase()
+
+    // Preferred structure: branchAssignments
+    if (scheduleData.branchAssignments && scheduleData.branchAssignments.length > 0) {
       for (const branch of scheduleData.branchAssignments) {
         const filtered = branch.employees
           .map(emp => ({ ...emp, branchName: branch.branchName }))
           .filter(emp => !query || (emp.employeeName || "").toLowerCase().includes(query))
+          .sort((a, b) => Number(b.isPresent) - Number(a.isPresent))
+
         if (filtered.length > 0) {
           result[branch.branchName] = filtered
         }
       }
+      return result
     }
+
+    // Legacy structure: assignments (flat list with branchName)
+    if (scheduleData.assignments && scheduleData.assignments.length > 0) {
+      const grouped: Record<string, any[]> = {}
+
+      for (const emp of scheduleData.assignments) {
+        const branchName = emp.branchName || "Unassigned"
+        if (!grouped[branchName]) grouped[branchName] = []
+        grouped[branchName].push(emp)
+      }
+
+      for (const [branchName, emps] of Object.entries(grouped)) {
+        const filtered = emps
+          .filter(emp => !query || (emp.employeeName || "").toLowerCase().includes(query))
+          .sort((a, b) => Number(b.isPresent) - Number(a.isPresent))
+        if (filtered.length > 0) {
+          result[branchName] = filtered as typeof uniqueScheduledEmployees
+        }
+      }
+    }
+
     return result
   }
 
@@ -327,7 +355,12 @@ export default function DashboardPage() {
                   ([branchName, branchCrews]) =>
                     branchCrews.length > 0 && (
                       <div key={branchName} className="space-y-4">
-                        <h3 className="text-lg font-semibold border-b pb-2">{branchName}</h3>
+                        <div className="flex items-center justify-between border-b pb-2">
+                          <h3 className="text-lg font-semibold">{branchName}</h3>
+                          <Badge variant="outline" className="text-xs">
+                            {branchCrews.filter((crew) => crew.isPresent).length}/{branchCrews.length} present
+                          </Badge>
+                        </div>
                         <div className="space-y-3">
                           {branchCrews.map((crew) => (
                             <div

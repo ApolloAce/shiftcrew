@@ -85,6 +85,32 @@ export async function PUT(req: Request) {
     params.push(id);
 
     await execute(`UPDATE leave_requests SET ${setClauses.join(", ")} WHERE id = ?`, params);
+
+    // If status changed to approved/rejected, create a notification for the employee
+    if (updates.status === "approved" || updates.status === "rejected") {
+      try {
+        const rows: any = await query("SELECT employeeId, startDate, endDate, type FROM leave_requests WHERE id = ?", [id]);
+        if (rows.length > 0) {
+          const lr = rows[0];
+          const startStr = typeof lr.startDate === "string" ? lr.startDate.slice(0, 10) : String(lr.startDate).slice(0, 10);
+          const endStr = typeof lr.endDate === "string" ? lr.endDate.slice(0, 10) : String(lr.endDate).slice(0, 10);
+          const isApproved = updates.status === "approved";
+          const notifId = crypto.randomUUID();
+          const now = mysqlNow();
+          const title = isApproved ? "Leave Request Approved" : "Leave Request Rejected";
+          const message = isApproved
+            ? `Your ${lr.type || "leave"} request (${startStr} to ${endStr}) has been approved.`
+            : `Your ${lr.type || "leave"} request (${startStr} to ${endStr}) has been rejected.${updates.notes ? " Reason: " + updates.notes : ""}`;
+          await execute(
+            `INSERT INTO notifications (id, recipientId, title, message, type, isRead, createdAt) VALUES (?, ?, ?, ?, ?, 0, ?)`,
+            [notifId, String(lr.employeeId), title, message, isApproved ? "success" : "warning", now]
+          );
+        }
+      } catch (notifErr) {
+        console.error("Failed to create leave notification:", notifErr);
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error("PUT /api/leave error:", error);

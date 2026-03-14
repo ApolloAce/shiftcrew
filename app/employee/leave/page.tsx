@@ -134,6 +134,7 @@ export default function EmployeeLeavePage() {
         })
 
         setIsDialogOpen(false)
+        window.dispatchEvent(new Event("leave-updated"))
         showNotification("success", "Leave Request Submitted", "Your leave request has been submitted for approval.")
       } else {
         showNotification("error", "Error", "Failed to submit leave request. Please try again.")
