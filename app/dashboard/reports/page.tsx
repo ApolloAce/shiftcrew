@@ -31,6 +31,8 @@ export default function ReportsPage() {
   const [leavePeriod, setLeavePeriod] = useState<"weekly" | "monthly" | "annually">("monthly")
   const [weekSchedules, setWeekSchedules] = useState<any[]>([])
   const [weekAttendance, setWeekAttendance] = useState<any[]>([])
+  const [trendSchedules, setTrendSchedules] = useState<any[]>([])
+  const [trendAttendance, setTrendAttendance] = useState<any[]>([])
 
   // Fetch Firestore data on mount
   useEffect(() => {
@@ -359,6 +361,48 @@ export default function ReportsPage() {
     fetchWeekData()
   }, [weekStartDate])
 
+  // Fetch historical data for trend charts.
+  // Weekly chart needs multiple weeks; monthly chart needs a broader date range.
+  useEffect(() => {
+    const fetchTrendData = async () => {
+      try {
+        let rangeStart = new Date(weekStartDate)
+        let rangeEnd = new Date(weekStartDate)
+        rangeEnd.setDate(rangeEnd.getDate() + 6)
+
+        if (timeRange === "week") {
+          rangeStart = new Date(weekStartDate)
+          rangeStart.setDate(rangeStart.getDate() - 21)
+        } else if (timeRange === "month") {
+          rangeStart = new Date(weekStartDate.getFullYear(), 0, 1)
+          rangeEnd = new Date(weekStartDate.getFullYear(), 11, 31)
+        }
+
+        const startStr = getDateString(rangeStart)
+        const endStr = getDateString(rangeEnd)
+
+        const [schedulesRes, attendanceRecords] = await Promise.all([
+          fetch(`/api/schedules?startDate=${startStr}&endDate=${endStr}`),
+          getAttendanceForDateRange(startStr, endStr),
+        ])
+
+        let schedules: any[] = []
+        if (schedulesRes.ok) {
+          schedules = await schedulesRes.json()
+        }
+
+        setTrendSchedules(schedules)
+        setTrendAttendance(attendanceRecords)
+      } catch (error) {
+        console.error("Error fetching trend data:", error)
+        setTrendSchedules([])
+        setTrendAttendance([])
+      }
+    }
+
+    fetchTrendData()
+  }, [timeRange, weekStartDate])
+
   // Build a lookup: employeeId_date -> "present"|"absent" from real attendance records
   const attendanceLookup = useMemo(() => {
     const lookup: Record<string, string> = {}
@@ -368,6 +412,15 @@ export default function ReportsPage() {
     }
     return lookup
   }, [weekAttendance])
+
+  const trendAttendanceLookup = useMemo(() => {
+    const lookup: Record<string, string> = {}
+    for (const rec of trendAttendance) {
+      const dateStr = typeof rec.date === "string" && rec.date.includes("T") ? rec.date.split("T")[0] : rec.date
+      lookup[`${rec.employeeId}_${dateStr}`] = rec.status
+    }
+    return lookup
+  }, [trendAttendance])
 
   // Generate historical attendance data for the entire week
   // Cross-references schedule assignments with actual daily_attendance records.
@@ -614,8 +667,8 @@ export default function ReportsPage() {
       // Build a map of weeks with their attendance data
       const weeksMap = new Map<string, { label: string; present: number; absent: number; date: Date }>()
 
-      // Scan all schedules to find weeks with attendance
-      weekSchedules.forEach((schedule: any) => {
+      // Scan historical schedules to find weeks with attendance
+      trendSchedules.forEach((schedule: any) => {
         const schedDateStr = schedule?.scheduleFor || schedule?.date
         if (!schedDateStr) return
 
@@ -631,7 +684,7 @@ export default function ReportsPage() {
         const weekData = weeksMap.get(weekKey)!
         const rows = getScheduledEmployeesFromSchedule(schedule)
         rows.forEach((emp: any) => {
-          const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+          const realStatus = trendAttendanceLookup[`${emp.employeeId}_${schedDateStr}`]
           if (realStatus === "present") {
             weekData.present++
           } else {
@@ -699,8 +752,8 @@ export default function ReportsPage() {
     const monthPresentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     const monthAbsentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-    // Aggregate real attendance data from all schedules grouped by month
-    weekSchedules.forEach((schedule: any) => {
+    // Aggregate real attendance data from historical schedules grouped by month
+    trendSchedules.forEach((schedule: any) => {
       const schedDateStr = schedule?.scheduleFor || schedule?.date
       if (!schedDateStr) return
 
@@ -709,7 +762,7 @@ export default function ReportsPage() {
       const rows = getScheduledEmployeesFromSchedule(schedule)
 
       rows.forEach((emp: any) => {
-        const realStatus = attendanceLookup[`${emp.employeeId}_${schedDateStr}`]
+        const realStatus = trendAttendanceLookup[`${emp.employeeId}_${schedDateStr}`]
         if (realStatus === "present") {
           monthPresentData[monthIndex]++
         } else {
@@ -737,7 +790,15 @@ export default function ReportsPage() {
         },
       ],
     }
-  }, [crews.length, timeRange, weekSchedules, weekStartDate, attendanceLookup])
+  }, [
+    crews.length,
+    timeRange,
+    weekSchedules,
+    weekStartDate,
+    attendanceLookup,
+    trendSchedules,
+    trendAttendanceLookup,
+  ])
 
   // Generate restaurant deployment data
   const restaurantDeploymentData = useMemo(() => {

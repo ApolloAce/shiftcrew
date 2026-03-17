@@ -21,6 +21,7 @@ files = [
     "app/api/cron/rotate/route.ts",
     "app/api/cron/post-leave/route.ts",
     "app/api/leave/route.ts",
+    "app/api/schedules/route.ts",
     "app/api/employees/route.ts",
     "app/api/employees/password/route.ts",
     "app/employee/profile/page.tsx",

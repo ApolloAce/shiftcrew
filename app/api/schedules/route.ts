@@ -11,6 +11,8 @@ export async function GET(req: Request) {
     const date = url.searchParams.get("date");
     const weekStart = url.searchParams.get("weekStart");
     const scheduleFor = url.searchParams.get("scheduleFor");
+    const startDate = url.searchParams.get("startDate");
+    const endDate = url.searchParams.get("endDate");
 
     let sql = "SELECT * FROM schedules";
     const params: any[] = [];
@@ -28,9 +30,19 @@ export async function GET(req: Request) {
       conditions.push("weekStart = ?");
       params.push(weekStart);
     }
+    if (startDate && endDate) {
+      conditions.push("COALESCE(scheduleFor, date) BETWEEN ? AND ?");
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      conditions.push("COALESCE(scheduleFor, date) >= ?");
+      params.push(startDate);
+    } else if (endDate) {
+      conditions.push("COALESCE(scheduleFor, date) <= ?");
+      params.push(endDate);
+    }
 
     if (conditions.length) sql += " WHERE " + conditions.join(" AND ");
-    sql += " ORDER BY date, time";
+    sql += " ORDER BY COALESCE(scheduleFor, date), time";
 
     const rows = await query(sql, params);
     return NextResponse.json(rows.map(mapSchedule));
