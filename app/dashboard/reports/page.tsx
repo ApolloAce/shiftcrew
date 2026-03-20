@@ -13,7 +13,8 @@ import { Chart, ChartContainer } from "@/components/ui/chart"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Search, Users, CheckCircle, XCircle, Clock, Calendar, Building, FileText, ChevronLeft, ChevronRight, TrendingUp, BarChart3 } from "lucide-react"
+import { Search, Users, CheckCircle, XCircle, Clock, Calendar, Building, FileText, ChevronLeft, ChevronRight, TrendingUp, BarChart3, Download, ArrowUpDown, ShieldCheck, ChevronDown } from "lucide-react"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { format } from "date-fns"
 
 function getMonday(date: Date) {
@@ -62,7 +63,9 @@ export default function ReportsPage() {
   const [trendSchedules, setTrendSchedules] = useState<any[]>([])
   const [trendAttendance, setTrendAttendance] = useState<any[]>([])
   const [searchQuery, setSearchQuery] = useState("")
-  const [attendanceFilter, setAttendanceFilter] = useState<"all" | "present" | "absent" | "undertime">("all")
+  const [attendanceFilter, setAttendanceFilter] = useState<"all" | "present" | "absent" | "undertime" | "excused">("all")
+  const [sortColumn, setSortColumn] = useState<string>("displayName")
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
   const [currentPage, setCurrentPage] = useState(1)
   const ITEMS_PER_PAGE = 15
   const [weekStartDate, setWeekStartDate] = useState<Date>(() => getMonday(new Date()))
@@ -180,7 +183,7 @@ export default function ReportsPage() {
 
   // Employee attendance rows for the week
   const attendanceHistory = useMemo(() => {
-    const employeeAtt: Record<string, { present: number; undertime: number; total: number; branchName: string; employeeName?: string }> = {}
+const employeeAtt: Record<string, { present: number; undertime: number; excused: number; total: number; branchName: string; employeeName?: string }> = {}
 
     weekSchedules.forEach((schedule: any) => {
       const scheduleDate = schedule?.scheduleFor || schedule?.date
@@ -194,15 +197,16 @@ export default function ReportsPage() {
         seen.add(key)
 
         if (!employeeAtt[emp.employeeId]) {
-          employeeAtt[emp.employeeId] = { present: 0, undertime: 0, total: 0, branchName: emp.branchName, employeeName: emp.employeeName }
+          employeeAtt[emp.employeeId] = { present: 0, undertime: 0, excused: 0, total: 0, branchName: emp.branchName, employeeName: emp.employeeName }
         }
         employeeAtt[emp.employeeId].total++
         employeeAtt[emp.employeeId].branchName = emp.branchName || employeeAtt[emp.employeeId].branchName
         if (emp.employeeName) employeeAtt[emp.employeeId].employeeName = emp.employeeName
 
         const status = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
-        if (status === "present") employeeAtt[emp.employeeId].present++
+        if (status === "present" || status === "excused") employeeAtt[emp.employeeId].present++
         else if (status === "undertime") employeeAtt[emp.employeeId].undertime++
+        if (status === "excused") employeeAtt[emp.employeeId].excused++
       })
     })
 
@@ -210,6 +214,7 @@ export default function ReportsPage() {
       .filter(([employeeId, att]) => {
         if (att.total <= 0) return false
         const crew = employees.find((c: any) => String(c.id) === String(employeeId))
+        if (!crew) return false
         if (crew?.archived) return false
         return true
       })
@@ -224,12 +229,14 @@ export default function ReportsPage() {
           displayName,
           employeeCode,
           branchName: att.branchName,
-          presentDays: att.present + att.undertime,
+          presentDays: att.present - att.excused,
           undertimeDays: att.undertime,
+          excusedDays: att.excused,
           totalDays: att.total,
           absentDays: att.total - att.present - att.undertime,
           wasPresent: att.present > 0 || att.undertime > 0,
           hasUndertime: att.undertime > 0,
+          hasExcused: att.excused > 0,
         }
       })
       .sort((a, b) => {
@@ -248,8 +255,15 @@ export default function ReportsPage() {
     if (attendanceFilter === "present") list = list.filter(e => e.wasPresent && !e.hasUndertime)
     else if (attendanceFilter === "absent") list = list.filter(e => !e.wasPresent)
     else if (attendanceFilter === "undertime") list = list.filter(e => e.hasUndertime)
+    else if (attendanceFilter === "excused") list = list.filter(e => e.hasExcused)
+    list = [...list].sort((a, b) => {
+      const valA = a[sortColumn as keyof typeof a]
+      const valB = b[sortColumn as keyof typeof b]
+      const cmp = typeof valA === "number" && typeof valB === "number" ? valA - valB : String(valA ?? "").localeCompare(String(valB ?? ""))
+      return sortDirection === "asc" ? cmp : -cmp
+    })
     return list
-  }, [attendanceHistory, searchQuery, attendanceFilter])
+  }, [attendanceHistory, searchQuery, attendanceFilter, sortColumn, sortDirection])
 
   const totalPages = Math.max(1, Math.ceil(filteredAttendance.length / ITEMS_PER_PAGE))
   const safePage = Math.min(currentPage, totalPages)
@@ -257,12 +271,13 @@ export default function ReportsPage() {
 
   // Summary stats
   const summary = useMemo(() => {
-    const present = attendanceHistory.filter(e => e.wasPresent && !e.hasUndertime).length
+    const excused = attendanceHistory.filter(e => e.hasExcused).length
+    const present = attendanceHistory.filter(e => e.wasPresent && !e.hasUndertime && !e.hasExcused).length
     const undertime = attendanceHistory.filter(e => e.hasUndertime).length
     const total = attendanceHistory.length
-    const absent = total - present - undertime
-    const rate = total > 0 ? Math.round(((present + undertime) / total) * 100) : 0
-    return { present, undertime, absent, total, rate }
+    const absent = total - present - undertime - excused
+    const rate = total > 0 ? Math.round(((present + undertime + excused) / total) * 100) : 0
+    return { present, undertime, excused, absent, total, rate }
   }, [attendanceHistory])
 
   // Branch allocation
@@ -287,7 +302,7 @@ export default function ReportsPage() {
         else if (crew?.type === "part-time") d.partTime++
         d.total++
         const status = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
-        if (status === "present" || status === "undertime") d.present++
+        if (status === "present" || status === "undertime" || status === "excused") d.present++
       })
     })
 
@@ -514,6 +529,191 @@ export default function ReportsPage() {
     )
   }
 
+  // Sort handler
+  const handleSort = (column: string) => {
+    if (sortColumn === column) setSortDirection(d => d === "asc" ? "desc" : "asc")
+    else { setSortColumn(column); setSortDirection("asc") }
+  }
+
+  const SortHeader = ({ column, children, className = "" }: { column: string; children: React.ReactNode; className?: string }) => (
+    <TableHead className={`cursor-pointer select-none hover:bg-muted/50 ${className}`} onClick={() => handleSort(column)}>
+      <div className="flex items-center gap-1">
+        {children}
+        <ArrowUpDown className={`h-3 w-3 ${sortColumn === column ? "text-primary" : "text-muted-foreground/50"}`} />
+      </div>
+    </TableHead>
+  )
+
+  // PDF helper: build themed HTML content
+  const buildPdfContent = (opts: { title: string; empList: typeof attendanceHistory; dateRange: string }) => {
+    const { title, empList, dateRange } = opts
+    const generatedAt = format(new Date(), "MMMM d, yyyy h:mm a")
+    const logoUrl = `${window.location.origin}/placeholder-logo.png`
+    const rows = empList.map((emp, i) => `<tr><td class="n">${i + 1}</td><td class="nm">${emp.displayName}</td><td class="mono">${emp.employeeCode || "\u2014"}</td><td>${emp.branchName}</td><td class="c g">${emp.presentDays}</td><td class="c a">${emp.undertimeDays}</td><td class="c t">${emp.excusedDays}</td><td class="c r">${emp.absentDays}</td><td class="c b">${emp.totalDays}</td></tr>`).join("")
+    const tP = empList.reduce((s, e) => s + e.presentDays, 0)
+    const tU = empList.reduce((s, e) => s + e.undertimeDays, 0)
+    const tE = empList.reduce((s, e) => s + e.excusedDays, 0)
+    const tA = empList.reduce((s, e) => s + e.absentDays, 0)
+    const tD = empList.reduce((s, e) => s + e.totalDays, 0)
+    return `<style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#1a1a1a;background:#fff}
+      .hdr{display:flex;align-items:center;gap:16px;padding:18px 28px 16px;background:linear-gradient(135deg,#1a2e38 0%,#2d4a56 100%);color:#fff}
+      .hdr img{width:56px;height:56px;object-fit:contain;border-radius:8px;background:rgba(255,255,255,0.15);padding:4px}
+      .hdr .ht{flex:1} .hdr .sn{font-size:22px;font-weight:700;letter-spacing:.5px} .hdr .ss{font-size:11px;opacity:.85;margin-top:1px}
+      .hdr .hr{text-align:right;font-size:10px;opacity:.85;line-height:1.6}
+      .tb{background:#e8f0f3;border-bottom:2px solid #4d7e8f;padding:10px 28px;display:flex;justify-content:space-between;align-items:center}
+      .tb .rt{font-size:13px;font-weight:700;color:#1a2e38} .tb .rm{font-size:10px;color:#555}
+      .sm{display:flex;gap:10px;padding:12px 28px;background:#fafafa;border-bottom:1px solid #e5e7eb}
+      .ch{flex:1;border-radius:6px;padding:8px 10px;text-align:center} .ch .v{font-size:18px;font-weight:700} .ch .l{font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+      .ch.cg{background:#dcfce7;color:#15803d} .ch.ca{background:#fef3c7;color:#b45309} .ch.ct{background:#d1fae5;color:#0f766e} .ch.cr{background:#fee2e2;color:#b91c1c} .ch.cy{background:#f3f4f6;color:#374151}
+      .wp{padding:16px 28px 24px}
+      table{width:100%;border-collapse:collapse;font-size:10.5px}
+      thead tr{background:#1a2e38;color:#fff}
+      thead th{padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+      thead th.c{text-align:center}
+      tbody tr:nth-child(even){background:#f8fafc} tbody tr:hover{background:#eff6ff}
+      td{padding:7px 10px;border-bottom:1px solid #e9ecef}
+      td.n{color:#9ca3af;width:32px} td.nm{font-weight:600} td.mono{font-family:'Courier New',monospace;font-size:10px;color:#6b7280}
+      td.c{text-align:center} td.g{color:#15803d;font-weight:600} td.a{color:#b45309;font-weight:600} td.t{color:#0f766e;font-weight:600} td.r{color:#b91c1c;font-weight:600} td.b{font-weight:700}
+      tfoot td{padding:8px 10px;font-weight:700;background:#e8f0f3;border-top:2px solid #4d7e8f} tfoot td.c{text-align:center}
+      .ft{padding:10px 28px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;font-size:9px;color:#9ca3af}
+    </style>
+    <div class="hdr">
+      <img src="${logoUrl}" alt="Logo" onerror="this.style.display='none'" />
+      <div class="ht"><div class="sn">ShiftCrew</div><div class="ss">Crew Management System</div></div>
+      <div class="hr"><div>${title}</div><div>${dateRange}</div></div>
+    </div>
+    <div class="tb"><span class="rt">${title}</span><span class="rm">Generated: ${generatedAt} | ${empList.length} employee(s)</span></div>
+    <div class="sm">
+      <div class="ch cg"><div class="v">${tP}</div><div class="l">Present Days</div></div>
+      <div class="ch ca"><div class="v">${tU}</div><div class="l">Undertime Days</div></div>
+      <div class="ch ct"><div class="v">${tE}</div><div class="l">Excused Days</div></div>
+      <div class="ch cr"><div class="v">${tA}</div><div class="l">Absent Days</div></div>
+      <div class="ch cy"><div class="v">${tD}</div><div class="l">Total Scheduled</div></div>
+    </div>
+    <div class="wp">
+      <table><thead><tr><th>#</th><th>Employee Name</th><th>Employee ID</th><th>Branch</th><th class="c">Present</th><th class="c">Undertime</th><th class="c">Excused</th><th class="c">Absent</th><th class="c">Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="4"><strong>TOTALS</strong></td><td class="c g">${tP}</td><td class="c a">${tU}</td><td class="c t">${tE}</td><td class="c r">${tA}</td><td class="c b">${tD}</td></tr></tfoot></table>
+    </div>
+    <div class="ft"><span>ShiftCrew Crew Management System</span><span>Confidential \u2014 For Internal Use Only</span><span>${generatedAt}</span></div>`
+  }
+
+  // Download PDF handler
+  const handleDownloadPdf = (title: string, empList: typeof attendanceHistory, filename: string) => {
+    const weekEndDate = new Date(weekStartDate)
+    weekEndDate.setDate(weekEndDate.getDate() + 6)
+    const dateRange = `${format(weekStartDate, "MMMM d")} \u2013 ${format(weekEndDate, "MMMM d, yyyy")}`
+    const htmlContent = buildPdfContent({ title, empList, dateRange })
+    const safeFilename = encodeURIComponent(filename)
+    const win = window.open("", "_blank")
+    if (!win) return
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"><\/script>
+</head><body style="margin:0;padding:0">
+${htmlContent}
+<script>
+window.onload=function(){
+  document.title='Generating PDF...';
+  setTimeout(function(){
+    html2pdf().set({
+      margin:0,
+      filename:decodeURIComponent('${safeFilename}'),
+      image:{type:'jpeg',quality:0.98},
+      html2canvas:{scale:2,useCORS:true,logging:false},
+      jsPDF:{unit:'mm',format:'a4',orientation:'landscape'}
+    }).from(document.body).save().then(function(){
+      document.title='PDF Downloaded!';
+      setTimeout(function(){window.close();},2000);
+    });
+  },600);
+};
+<\/script></body></html>`)
+    win.document.close()
+  }
+
+  // Branch allocation PDF
+  const handleDownloadBranchPdf = (branchData: typeof branchAllocation, filename: string) => {
+    const weekEndDate = new Date(weekStartDate)
+    weekEndDate.setDate(weekEndDate.getDate() + 6)
+    const dateRange = `${format(weekStartDate, "MMMM d")} \u2013 ${format(weekEndDate, "MMMM d, yyyy")}`
+    const generatedAt = format(new Date(), "MMMM d, yyyy h:mm a")
+    const logoUrl = `${window.location.origin}/placeholder-logo.png`
+    const tFT = branchData.reduce((s, b) => s + b.fullTime, 0)
+    const tPT = branchData.reduce((s, b) => s + b.partTime, 0)
+    const tTotal = branchData.reduce((s, b) => s + b.total, 0)
+    const avgRate = branchData.length > 0 ? Math.round(branchData.reduce((s, b) => s + b.attendanceRate, 0) / branchData.length) : 0
+    const rows = branchData.map((b, i) => `<tr><td class="n">${i + 1}</td><td class="nm">${b.branchName}</td><td class="c">${b.fullTime}</td><td class="c">${b.partTime}</td><td class="c b">${b.total}</td><td class="c ${b.attendanceRate >= 75 ? 'g' : b.attendanceRate >= 50 ? 'a' : 'r'}">${b.attendanceRate}%</td></tr>`).join("")
+    const htmlContent = `<style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:'Segoe UI',Arial,sans-serif;font-size:11px;color:#1a1a1a;background:#fff}
+      .hdr{display:flex;align-items:center;gap:16px;padding:18px 28px 16px;background:linear-gradient(135deg,#1a2e38 0%,#2d4a56 100%);color:#fff}
+      .hdr img{width:56px;height:56px;object-fit:contain;border-radius:8px;background:rgba(255,255,255,0.15);padding:4px}
+      .hdr .ht{flex:1} .hdr .sn{font-size:22px;font-weight:700;letter-spacing:.5px} .hdr .ss{font-size:11px;opacity:.85;margin-top:1px}
+      .hdr .hr{text-align:right;font-size:10px;opacity:.85;line-height:1.6}
+      .tb{background:#e8f0f3;border-bottom:2px solid #4d7e8f;padding:10px 28px;display:flex;justify-content:space-between;align-items:center}
+      .tb .rt{font-size:13px;font-weight:700;color:#1a2e38} .tb .rm{font-size:10px;color:#555}
+      .sm{display:flex;gap:10px;padding:12px 28px;background:#fafafa;border-bottom:1px solid #e5e7eb}
+      .ch{flex:1;border-radius:6px;padding:8px 10px;text-align:center} .ch .v{font-size:18px;font-weight:700} .ch .l{font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+      .ch.cg{background:#dcfce7;color:#15803d} .ch.ca{background:#e0f2fe;color:#0369a1} .ch.ct{background:#f3e8ff;color:#7c3aed} .ch.cy{background:#f3f4f6;color:#374151}
+      .wp{padding:16px 28px 24px}
+      table{width:100%;border-collapse:collapse;font-size:10.5px}
+      thead tr{background:#1a2e38;color:#fff}
+      thead th{padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+      thead th.c{text-align:center}
+      tbody tr:nth-child(even){background:#f8fafc} tbody tr:hover{background:#eff6ff}
+      td{padding:7px 10px;border-bottom:1px solid #e9ecef}
+      td.n{color:#9ca3af;width:32px} td.nm{font-weight:600}
+      td.c{text-align:center} td.g{color:#15803d;font-weight:600} td.a{color:#b45309;font-weight:600} td.r{color:#b91c1c;font-weight:600} td.b{font-weight:700}
+      tfoot td{padding:8px 10px;font-weight:700;background:#e8f0f3;border-top:2px solid #4d7e8f} tfoot td.c{text-align:center}
+      .ft{padding:10px 28px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;font-size:9px;color:#9ca3af}
+    </style>
+    <div class="hdr">
+      <img src="${logoUrl}" alt="Logo" onerror="this.style.display='none'" />
+      <div class="ht"><div class="sn">ShiftCrew</div><div class="ss">Crew Management System</div></div>
+      <div class="hr"><div>Branch Allocation Report</div><div>${dateRange}</div></div>
+    </div>
+    <div class="tb"><span class="rt">Branch Allocation Report</span><span class="rm">Generated: ${generatedAt} | ${branchData.length} branch(es)</span></div>
+    <div class="sm">
+      <div class="ch ca"><div class="v">${tFT}</div><div class="l">Full-Time</div></div>
+      <div class="ch ct"><div class="v">${tPT}</div><div class="l">Part-Time</div></div>
+      <div class="ch cy"><div class="v">${tTotal}</div><div class="l">Total Assigned</div></div>
+      <div class="ch cg"><div class="v">${avgRate}%</div><div class="l">Avg Attendance</div></div>
+    </div>
+    <div class="wp">
+      <table><thead><tr><th>#</th><th>Branch Name</th><th class="c">Full-Time</th><th class="c">Part-Time</th><th class="c">Total</th><th class="c">Attendance Rate</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="2"><strong>TOTALS</strong></td><td class="c">${tFT}</td><td class="c">${tPT}</td><td class="c b">${tTotal}</td><td class="c g">${avgRate}%</td></tr></tfoot></table>
+    </div>
+    <div class="ft"><span>ShiftCrew Crew Management System</span><span>Confidential \u2014 For Internal Use Only</span><span>${generatedAt}</span></div>`
+    const safeFilename = encodeURIComponent(filename)
+    const win = window.open("", "_blank")
+    if (!win) return
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Branch Allocation Report</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"><\/script>
+</head><body style="margin:0;padding:0">
+${htmlContent}
+<script>
+window.onload=function(){
+  document.title='Generating PDF...';
+  setTimeout(function(){
+    html2pdf().set({
+      margin:0,
+      filename:decodeURIComponent('${safeFilename}'),
+      image:{type:'jpeg',quality:0.98},
+      html2canvas:{scale:2,useCORS:true,logging:false},
+      jsPDF:{unit:'mm',format:'a4',orientation:'landscape'}
+    }).from(document.body).save().then(function(){
+      document.title='PDF Downloaded!';
+      setTimeout(function(){window.close();},2000);
+    });
+  },600);
+};
+<\/script></body></html>`)
+    win.document.close()
+  }
+
   const PaginationControls = ({ current, total, setCurrent, count, perPage }: { current: number; total: number; setCurrent: (p: number) => void; count: number; perPage: number }) => {
     if (total <= 1) return null
     return (
@@ -572,7 +772,7 @@ export default function ReportsPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card className="border-l-4 border-l-green-500">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-950 flex items-center justify-center flex-shrink-0">
@@ -592,6 +792,17 @@ export default function ReportsPage() {
             <div>
               <div className="text-xl font-bold">{summary.undertime}</div>
               <div className="text-xs text-muted-foreground">Undertime</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-teal-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-teal-100 dark:bg-teal-950 flex items-center justify-center flex-shrink-0">
+              <ShieldCheck className="h-5 w-5 text-teal-600 dark:text-teal-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.excused}</div>
+              <div className="text-xs text-muted-foreground">Excused</div>
             </div>
           </CardContent>
         </Card>
@@ -676,17 +887,66 @@ export default function ReportsPage() {
             <CardHeader className="pb-3">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <CardTitle className="text-base">Employee Attendance Logs</CardTitle>
-                <Select value={attendanceFilter} onValueChange={(v: any) => { setAttendanceFilter(v); setCurrentPage(1) }}>
-                  <SelectTrigger className="w-[160px] h-7 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="present">Present</SelectItem>
-                    <SelectItem value="absent">Absent</SelectItem>
-                    <SelectItem value="undertime">Undertime</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5">
+                        <Download className="h-3.5 w-3.5" />
+                        Download PDF
+                        <ChevronDown className="h-3 w-3 ml-0.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          const we = new Date(weekStartDate)
+                          we.setDate(we.getDate() + 6)
+                          handleDownloadPdf("Weekly Attendance Summary", filteredAttendance, `Attendance_Report_${format(weekStartDate, "MMMd")}-${format(we, "MMMd_yyyy")}.pdf`)
+                        }}
+                      >
+                        <Download className="h-3.5 w-3.5 mr-2" />
+                        Download All
+                      </DropdownMenuItem>
+                      {(() => {
+                        const branchNames = [...new Set(attendanceHistory.map(e => e.branchName))].sort()
+                        if (branchNames.length > 0) {
+                          return (
+                            <>
+                              <DropdownMenuSeparator />
+                              {branchNames.map(name => (
+                                <DropdownMenuItem
+                                  key={name}
+                                  onClick={() => {
+                                    const we = new Date(weekStartDate)
+                                    we.setDate(we.getDate() + 6)
+                                    const branchData = filteredAttendance.filter(e => e.branchName === name)
+                                    handleDownloadPdf(`${name} — Attendance Summary`, branchData, `Attendance_${name.replace(/\s+/g, "_")}_${format(weekStartDate, "MMMd")}-${format(we, "MMMd_yyyy")}.pdf`)
+                                  }}
+                                >
+                                  <Building className="h-3.5 w-3.5 mr-2" />
+                                  Download {name}
+                                </DropdownMenuItem>
+                              ))}
+                            </>
+                          )
+                        }
+                        return null
+                      })()}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Select value={attendanceFilter} onValueChange={(v: any) => { setAttendanceFilter(v); setCurrentPage(1) }}>
+                    <SelectTrigger className="w-[160px] h-7 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="present">Present</SelectItem>
+                      <SelectItem value="absent">Absent</SelectItem>
+                      <SelectItem value="undertime">Undertime</SelectItem>
+                      <SelectItem value="excused">Excused</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="relative mt-2 max-w-sm">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -702,12 +962,14 @@ export default function ReportsPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead className="w-[40px]">#</TableHead>
-                          <TableHead>Employee</TableHead>
-                          <TableHead>Employee ID</TableHead>
-                          <TableHead>Branch</TableHead>
-                          <TableHead className="text-center">Days Present</TableHead>
-                          <TableHead className="text-center">Total Days</TableHead>
-                          <TableHead>Status</TableHead>
+                          <SortHeader column="displayName">Employee</SortHeader>
+                          <SortHeader column="employeeCode">Employee ID</SortHeader>
+                          <SortHeader column="branchName">Branch</SortHeader>
+                          <SortHeader column="presentDays" className="text-center">Present</SortHeader>
+                          <SortHeader column="undertimeDays" className="text-center">Undertime</SortHeader>
+                          <SortHeader column="excusedDays" className="text-center">Excused</SortHeader>
+                          <SortHeader column="absentDays" className="text-center">Absent</SortHeader>
+                          <SortHeader column="totalDays" className="text-center">Total Days</SortHeader>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -717,18 +979,23 @@ export default function ReportsPage() {
                             <TableCell className="font-medium">{emp.displayName}</TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{emp.employeeCode || "—"}</TableCell>
                             <TableCell className="text-muted-foreground">{emp.branchName}</TableCell>
+                            <TableCell className="text-center">{emp.presentDays}</TableCell>
                             <TableCell className="text-center">
-                              {emp.presentDays}
-                              {emp.undertimeDays > 0 && <span className="text-amber-600 text-xs ml-1">({emp.undertimeDays} UT)</span>}
+                              {emp.undertimeDays > 0
+                                ? <span className="text-amber-600 font-medium">{emp.undertimeDays}</span>
+                                : <span className="text-muted-foreground">0</span>}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {emp.excusedDays > 0
+                                ? <span className="text-green-600 font-medium">{emp.excusedDays}</span>
+                                : <span className="text-muted-foreground">0</span>}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {emp.absentDays > 0
+                                ? <span className="text-red-600 font-medium">{emp.absentDays}</span>
+                                : <span className="text-muted-foreground">0</span>}
                             </TableCell>
                             <TableCell className="text-center">{emp.totalDays}</TableCell>
-                            <TableCell>
-                              {emp.hasUndertime ? (
-                                <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800" variant="outline">Undertime</Badge>
-                              ) : (
-                                <Badge variant={emp.wasPresent ? "default" : "destructive"}>{emp.wasPresent ? "Present" : "Absent"}</Badge>
-                              )}
-                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -810,7 +1077,22 @@ export default function ReportsPage() {
           {/* Branch Allocation Table */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Crew Allocation by Branch</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Crew Allocation by Branch</CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs gap-1.5"
+                  onClick={() => {
+                    const we = new Date(weekStartDate)
+                    we.setDate(we.getDate() + 6)
+                    handleDownloadBranchPdf(branchAllocation, `Branch_Allocation_Report_${format(weekStartDate, "MMMd")}-${format(we, "MMMd_yyyy")}.pdf`)
+                  }}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download All
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -822,6 +1104,7 @@ export default function ReportsPage() {
                       <TableHead className="text-center">Part-Time</TableHead>
                       <TableHead className="text-center">Total</TableHead>
                       <TableHead>Attendance Rate</TableHead>
+                      <TableHead className="text-center w-[80px]">Report</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -839,10 +1122,27 @@ export default function ReportsPage() {
                             </div>
                           </div>
                         </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            title={`Download ${a.branchName} report`}
+                            onClick={() => {
+                              const branchEmps = attendanceHistory.filter(e => e.branchName === a.branchName)
+                              const we = new Date(weekStartDate)
+                              we.setDate(we.getDate() + 6)
+                              const safeName = a.branchName.replace(/[^a-zA-Z0-9]/g, "_")
+                              handleDownloadPdf(`${a.branchName} Attendance Report`, branchEmps, `${safeName}_Report_${format(weekStartDate, "MMMd")}-${format(we, "MMMd_yyyy")}.pdf`)
+                            }}
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     )) : (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No branch allocation data</TableCell>
+                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No branch allocation data</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
@@ -939,7 +1239,6 @@ export default function ReportsPage() {
                           <TableHead>Employee ID</TableHead>
                           <TableHead>Date Range</TableHead>
                           <TableHead>Reason</TableHead>
-                          <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -954,12 +1253,7 @@ export default function ReportsPage() {
                               {leave.startDate}{leave.endDate && leave.endDate !== leave.startDate ? ` \u2192 ${leave.endDate}` : ""}
                             </TableCell>
                             <TableCell className="text-sm">{leave.reason || "\u2014"}</TableCell>
-                            <TableCell>
-                              <Badge variant={leave.status === "approved" ? "default" : leave.status === "rejected" ? "destructive" : "outline"}
-                                className={leave.status === "pending" ? "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400" : ""}>
-                                {leave.status}
-                              </Badge>
-                            </TableCell>
+
                           </TableRow>
                         )})}
                       </TableBody>

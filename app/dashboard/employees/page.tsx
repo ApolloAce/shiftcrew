@@ -47,13 +47,17 @@ function EditEmployeeDialogContent({ employee, isProcessing, onCancel, onSave }:
 
   return (
     <div className="space-y-6 py-4">
-      <div className="flex justify-center gap-4">
-        <Button variant={mode === "full-time" ? "default" : "outline"} onClick={() => setMode("full-time")}>
-          Full-Time
-        </Button>
-        <Button variant={mode === "part-time" ? "default" : "outline"} onClick={() => setMode("part-time")}>
-          Part-Time
-        </Button>
+      <div className="grid gap-2">
+        <Label>Employee Type</Label>
+        <Select value={mode} onValueChange={(v) => setMode(v as "full-time" | "part-time")}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="full-time">Full-Time</SelectItem>
+            <SelectItem value="part-time">Part-Time</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="space-y-4">
@@ -126,11 +130,14 @@ function EditEmployeeDialogContent({ employee, isProcessing, onCancel, onSave }:
 type AddEmployeeDialogProps = {
   onCancel: () => void
   onSuccess: () => void
+  existingEmployees: Employee[]
 }
 
-function AddEmployeeDialogContent({ onCancel, onSuccess }: AddEmployeeDialogProps) {
+function AddEmployeeDialogContent({ onCancel, onSuccess, existingEmployees }: AddEmployeeDialogProps) {
   const { showNotification } = useNotification()
   const [mode, setMode] = useState<"full-time" | "part-time">("full-time")
+  const [emailPrefix, setEmailPrefix] = useState("")
+  const [emailError, setEmailError] = useState("")
   const [formData, setFormData] = useState({
     firstName: "",
     surname: "",
@@ -150,6 +157,18 @@ function AddEmployeeDialogContent({ onCancel, onSuccess }: AddEmployeeDialogProp
     setFormData((prev) => ({ ...prev, [name]: value }))
   }
 
+  const handleEmailPrefixChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.replace(/@.*$/, "").toLowerCase()
+    setEmailPrefix(val)
+    const fullEmail = val ? `${val}@shiftcrew.com` : ""
+    setFormData((prev) => ({ ...prev, email: fullEmail }))
+    if (fullEmail && existingEmployees.some(emp => emp.email?.toLowerCase() === fullEmail.toLowerCase())) {
+      setEmailError("This email is already taken")
+    } else {
+      setEmailError("")
+    }
+  }
+
   const handleAvailabilityChange = (day: string, checked: boolean) => {
     setFormData((prev) => {
       const availability = [...prev.availability]
@@ -163,6 +182,7 @@ function AddEmployeeDialogContent({ onCancel, onSuccess }: AddEmployeeDialogProp
     e.preventDefault()
     if (!formData.firstName || !formData.surname) { showNotification("error", "Validation Error", "First name and surname are required"); return }
     if (!formData.email) { showNotification("error", "Validation Error", "Email is required"); return }
+    if (emailError) { showNotification("error", "Validation Error", "This email is already taken by another employee"); return }
     if (!formData.password) { showNotification("error", "Validation Error", "Password is required"); return }
     setIsSubmitting(true)
     try {
@@ -213,7 +233,19 @@ function AddEmployeeDialogContent({ onCancel, onSuccess }: AddEmployeeDialogProp
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="addEmail">Email *</Label>
-        <Input id="addEmail" name="email" type="email" placeholder="Employee email" value={formData.email} onChange={handleInputChange} required />
+        <div className="flex">
+          <Input
+            id="addEmail"
+            type="text"
+            placeholder="username"
+            value={emailPrefix}
+            onChange={handleEmailPrefixChange}
+            required
+            className={`rounded-r-none border-r-0 ${emailError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+          />
+          <span className="inline-flex items-center px-3 rounded-r-md border border-l-0 border-input bg-muted text-muted-foreground text-sm">@shiftcrew.com</span>
+        </div>
+        {emailError && <p className="text-xs text-red-500 mt-1">{emailError}</p>}
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="addPassword">Password *</Label>
@@ -680,6 +712,7 @@ function EmployeesContent() {
           openDialog(
             <AddEmployeeDialogContent
               onCancel={closeDialog}
+              existingEmployees={activeCrews}
               onSuccess={async () => {
                 closeDialog()
                 const [active, archived] = await Promise.all([getActiveEmployees(), getArchivedEmployees()])

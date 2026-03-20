@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS daily_attendance (
   employeeId   VARCHAR(64)  NOT NULL,
   employeeName VARCHAR(200) DEFAULT NULL,
   date         VARCHAR(10)  NOT NULL,
-  status       ENUM('present','absent','undertime') NOT NULL DEFAULT 'present',
+  status       ENUM('present','absent','undertime','excused') NOT NULL DEFAULT 'present',
   timeIn       VARCHAR(8)   DEFAULT NULL,
   timeOut      VARCHAR(8)   DEFAULT NULL,
   photoUrl     LONGTEXT     DEFAULT NULL,

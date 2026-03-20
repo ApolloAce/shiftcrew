@@ -95,12 +95,12 @@ export default function AbsencesPage() {
         notes: absenceForm.notes || undefined,
       })
 
-      // Update attendance record to absent
+      // Update attendance record based on absence status
       await saveAttendanceRecord({
         employeeId: absenceForm.employeeId,
         employeeName,
         date: absenceForm.date,
-        status: "absent",
+        status: absenceForm.status === "excused" ? "excused" : "absent",
       })
 
       // Add to local state
@@ -140,6 +140,17 @@ export default function AbsencesPage() {
   const handleUpdateAbsenceStatus = async (absenceId: string, newStatus: "excused" | "unexcused") => {
     try {
       await updateAbsenceStatus(absenceId, newStatus)
+
+      // Update attendance record to match absence status
+      const absence = absences.find((a) => a.id === absenceId)
+      if (absence) {
+        await saveAttendanceRecord({
+          employeeId: absence.employeeId,
+          employeeName: absence.employeeName,
+          date: absence.date,
+          status: newStatus === "excused" ? "excused" : "absent",
+        })
+      }
       
       // Update local state
       setAbsences((prev) =>

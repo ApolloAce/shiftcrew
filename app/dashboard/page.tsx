@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Users, UserPlus, Calendar, Building, FileText, BarChart, CheckCircle, XCircle, Clock, AlertTriangle } from "lucide-react"
+import { Search, Users, UserPlus, Calendar, Building, FileText, BarChart, CheckCircle, XCircle, Clock, AlertTriangle, ShieldCheck } from "lucide-react"
 import { useNotification } from "@/components/notification-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
@@ -29,7 +29,7 @@ function getMonday(date: Date) {
   return d
 }
 
-type StatusFilter = "all" | "present" | "absent" | "undertime"
+type StatusFilter = "all" | "present" | "absent" | "undertime" | "excused"
 const ITEMS_PER_PAGE = 10
 
 export default function DashboardPage() {
@@ -108,7 +108,7 @@ export default function DashboardPage() {
                 const attendanceStatus = attendanceLookup.get(String(emp.employeeId))
                 return {
                   ...emp,
-                  isPresent: attendanceStatus === "present" || attendanceStatus === "undertime",
+                  isPresent: attendanceStatus === "present" || attendanceStatus === "undertime" || attendanceStatus === "excused",
                   attendanceStatus: attendanceStatus || null,
                 }
               }),
@@ -119,7 +119,7 @@ export default function DashboardPage() {
               const attendanceStatus = attendanceLookup.get(String(emp.employeeId))
               return {
                 ...emp,
-                isPresent: attendanceStatus === "present" || attendanceStatus === "undertime",
+                isPresent: attendanceStatus === "present" || attendanceStatus === "undertime" || attendanceStatus === "excused",
                 attendanceStatus: attendanceStatus || null,
               }
             })
@@ -177,10 +177,11 @@ export default function DashboardPage() {
       return acc;
     }, {} as Record<string, typeof allScheduledEmployees[0]>)
   );
-  const presentCount = uniqueScheduledEmployees.filter(e => e.isPresent && e.attendanceStatus !== "undertime").length;
+  const presentCount = uniqueScheduledEmployees.filter(e => e.isPresent && e.attendanceStatus !== "undertime" && e.attendanceStatus !== "excused").length;
   const undertimeCount = uniqueScheduledEmployees.filter(e => e.attendanceStatus === "undertime").length;
+  const excusedCount = uniqueScheduledEmployees.filter(e => e.attendanceStatus === "excused").length;
   const totalCount = uniqueScheduledEmployees.length;
-  const absentCount = totalCount - presentCount - undertimeCount;
+  const absentCount = totalCount - presentCount - undertimeCount - excusedCount;
   const attendancePercentage = totalCount > 0 ? Math.round(((presentCount + undertimeCount) / totalCount) * 100) : 0;
 
   const handleToggleScheduledAttendance = async (employeeId: string, branchName: string) => {
@@ -232,7 +233,7 @@ export default function DashboardPage() {
             ...branch,
             employees: branch.employees.map((e: any) => {
               const attendanceStatus = attendanceLookup.get(String(e.employeeId))
-              return { ...e, isPresent: attendanceStatus === "present" || attendanceStatus === "undertime", attendanceStatus: attendanceStatus || null }
+              return { ...e, isPresent: attendanceStatus === "present" || attendanceStatus === "undertime" || attendanceStatus === "excused", attendanceStatus: attendanceStatus || null }
             }),
           }))
         }
@@ -257,16 +258,18 @@ export default function DashboardPage() {
 
     // Status filter
     if (statusFilter === "present") {
-      list = list.filter(e => e.isPresent && (e as any).attendanceStatus !== "undertime")
+      list = list.filter(e => e.isPresent && (e as any).attendanceStatus !== "undertime" && (e as any).attendanceStatus !== "excused")
     } else if (statusFilter === "absent") {
       list = list.filter(e => !e.isPresent)
     } else if (statusFilter === "undertime") {
       list = list.filter(e => (e as any).attendanceStatus === "undertime")
+    } else if (statusFilter === "excused") {
+      list = list.filter(e => (e as any).attendanceStatus === "excused")
     }
 
-    // Sort: present first, then undertime, then absent
+    // Sort: present first, then undertime, then excused, then absent
     list.sort((a, b) => {
-      const statusOrder = (e: typeof a) => (e as any).attendanceStatus === "undertime" ? 1 : e.isPresent ? 0 : 2
+      const statusOrder = (e: typeof a) => (e as any).attendanceStatus === "undertime" ? 1 : (e as any).attendanceStatus === "excused" ? 2 : e.isPresent ? 0 : 3
       return statusOrder(a) - statusOrder(b)
     })
 
@@ -299,15 +302,6 @@ export default function DashboardPage() {
   const todayFormatted = today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
   const firstName = currentUser?.firstName || currentUser?.name?.split(" ")[0] || "Admin"
 
-  const quickActions = [
-    { label: "Employees", icon: Users, path: "/dashboard/employees", color: "bg-blue-500", description: "View & manage" },
-    { label: "Schedule", icon: Calendar, path: "/dashboard/scheduling", color: "bg-violet-500", description: "Assign shifts" },
-    { label: "Register", icon: UserPlus, path: "/dashboard/registration", color: "bg-emerald-500", description: "New employee" },
-    { label: "Branches", icon: Building, path: "/dashboard/branches", color: "bg-orange-500", description: "Locations" },
-    { label: "Leave", icon: FileText, path: "/dashboard/leave-approvals", color: "bg-rose-500", badge: weeklyLeaves.length, description: "Approvals" },
-    { label: "Reports", icon: BarChart, path: "/dashboard/reports", color: "bg-cyan-500", description: "Analytics" },
-  ]
-
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -315,10 +309,7 @@ export default function DashboardPage() {
           <div className="h-8 w-64 bg-muted animate-pulse rounded-lg" />
           <div className="h-5 w-48 bg-muted animate-pulse rounded-lg" />
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {[...Array(6)].map((_, i) => <div key={i} className="h-24 bg-muted animate-pulse rounded-xl" />)}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => <div key={i} className="h-28 bg-muted animate-pulse rounded-xl" />)}
         </div>
       </div>
@@ -335,35 +326,8 @@ export default function DashboardPage() {
         <p className="text-muted-foreground mt-0.5">{todayFormatted}</p>
       </div>
 
-      {/* Quick Action Grid */}
-      <div className="grid grid-cols-3 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {quickActions.map((action) => {
-          const Icon = action.icon
-          return (
-            <button
-              key={action.path}
-              onClick={() => router.push(action.path)}
-              className="group relative flex flex-col items-center gap-2 p-4 rounded-xl bg-white dark:bg-gray-900 border shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5"
-            >
-              <div className={`${action.color} h-10 w-10 rounded-lg flex items-center justify-center shadow-sm`}>
-                <Icon className="h-5 w-5 text-white" />
-              </div>
-              <div className="text-center">
-                <div className="text-sm font-medium">{action.label}</div>
-                <div className="text-[11px] text-muted-foreground hidden sm:block">{action.description}</div>
-              </div>
-              {(action.badge ?? 0) > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 text-[11px] font-bold text-white px-1">
-                  {action.badge}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         {/* Present (includes undertime) */}
         <Card className="border-l-4 border-l-green-500 shadow-sm cursor-pointer hover:shadow-md transition-shadow" onClick={() => setStatusFilter(statusFilter === "present" ? "all" : "present")}>
           <CardContent className="p-4 flex items-center gap-4">
@@ -386,6 +350,19 @@ export default function DashboardPage() {
             <div>
               <div className="text-2xl font-bold">{undertimeCount}</div>
               <div className="text-sm text-muted-foreground">Undertime</div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Excused */}
+        <Card className="border-l-4 border-l-teal-500 shadow-sm cursor-pointer hover:shadow-md transition-shadow" onClick={() => setStatusFilter(statusFilter === "excused" ? "all" : "excused")}>
+          <CardContent className="p-4 flex items-center gap-4">
+            <div className="h-11 w-11 rounded-full bg-teal-100 dark:bg-teal-950 flex items-center justify-center flex-shrink-0">
+              <ShieldCheck className="h-5 w-5 text-teal-600 dark:text-teal-400" />
+            </div>
+            <div>
+              <div className="text-2xl font-bold">{excusedCount}</div>
+              <div className="text-sm text-muted-foreground">Excused</div>
             </div>
           </CardContent>
         </Card>
@@ -433,6 +410,7 @@ export default function DashboardPage() {
                 <SelectItem value="present">Present ({presentCount})</SelectItem>
                 <SelectItem value="absent">Absent ({absentCount})</SelectItem>
                 <SelectItem value="undertime">Undertime ({undertimeCount})</SelectItem>
+                <SelectItem value="excused">Excused ({excusedCount})</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -463,7 +441,8 @@ export default function DashboardPage() {
                 </TableHeader>
                 <TableBody>
                   {paginatedEmployees.map((emp, index) => {
-                    const status = (emp as any).attendanceStatus === "undertime" ? "undertime" : emp.isPresent ? "present" : "absent"
+                    const status = (emp as any).attendanceStatus === "undertime" ? "undertime" : (emp as any).attendanceStatus === "excused" ? "excused" : emp.isPresent ? "present" : "absent"
+                    const isExcused = status === "excused"
                     return (
                       <TableRow key={emp.employeeId}>
                         <TableCell className="text-muted-foreground">{(safePage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
@@ -472,10 +451,10 @@ export default function DashboardPage() {
                         <TableCell className="text-muted-foreground">{emp.branchName}</TableCell>
                         <TableCell>
                           <Badge
-                            variant={status === "present" ? "default" : status === "absent" ? "destructive" : "outline"}
-                            className={status === "undertime" ? "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800" : ""}
+                            variant={status === "present" ? "default" : (status === "absent" && !isExcused) ? "destructive" : "outline"}
+                            className={status === "undertime" ? "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800" : isExcused ? "bg-green-100 text-green-700 border-green-300 dark:bg-green-950 dark:text-green-400 dark:border-green-800" : ""}
                           >
-                            {status === "undertime" ? "Undertime" : status === "present" ? "Present" : "Absent"}
+                            {status === "undertime" ? "Undertime" : status === "present" ? "Present" : isExcused ? "Excused" : "Absent"}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">

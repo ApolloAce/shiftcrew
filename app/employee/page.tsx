@@ -33,6 +33,9 @@ export default function EmployeeDashboard() {
   const [isOnLeave, setIsOnLeave] = useState(false)
   const [leaveEndDate, setLeaveEndDate] = useState<string | null>(null)
 
+  // Absence excused status
+  const [isExcusedAbsent, setIsExcusedAbsent] = useState(false)
+
   // Location-based clock-in/out modal state
   const [showClockInModal, setShowClockInModal] = useState(false)
   const [showClockOutModal, setShowClockOutModal] = useState(false)
@@ -61,13 +64,14 @@ export default function EmployeeDashboard() {
         try {
           const today = toLocalDateISO()
 
-          const [branchRes, attendanceRes, leaveRes, approvedLeaveRes] = await Promise.all([
+          const [branchRes, attendanceRes, leaveRes, approvedLeaveRes, absenceRes] = await Promise.all([
             userData.branchId
               ? fetch(`/api/branches?id=${userData.branchId}`).then((r) => r.ok ? r.json() : null)
               : Promise.resolve(null),
             fetch(`/api/attendance?employeeId=${userData.id}&date=${today}`).then((r) => r.ok ? r.json() : []),
             fetch(`/api/leave?employeeId=${userData.id}&status=pending`).then((r) => r.ok ? r.json() : []),
             fetch(`/api/leave?employeeId=${userData.id}&status=approved`).then((r) => r.ok ? r.json() : []),
+            fetch(`/api/absences?employeeId=${userData.id}&date=${today}`).then((r) => r.ok ? r.json() : []),
           ])
 
           // Check if employee is currently on approved leave
@@ -86,6 +90,12 @@ export default function EmployeeDashboard() {
           // Find today's attendance record
           if (Array.isArray(attendanceRes) && attendanceRes.length > 0) {
             setLatestTimeRecord(attendanceRes[0])
+          }
+
+          // Check if today's absence is excused
+          if (Array.isArray(absenceRes) && absenceRes.length > 0) {
+            const todayAbsence = absenceRes.find((a: any) => a.status === "excused")
+            if (todayAbsence) setIsExcusedAbsent(true)
           }
 
           // Fetch schedules for today using scheduleFor (exact match)
@@ -478,10 +488,10 @@ export default function EmployeeDashboard() {
               <div className="flex justify-between items-center">
                 <div className="text-sm text-muted-foreground">Status:</div>
                 <Badge
-                  variant={isOnLeave ? "default" : (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") ? "default" : "outline")}
-                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}
+                  variant={isOnLeave ? "default" : (latestTimeRecord?.status === "absent" ? "destructive" : latestTimeRecord?.status === "excused" ? "default" : (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") ? "default" : "outline"))}
+                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-600 hover:bg-green-700 text-white" : ""}
                 >
-                  {isOnLeave ? "On Leave" : latestTimeRecord?.status === "undertime" ? "Undertime" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
+                  {isOnLeave ? "On Leave" : latestTimeRecord?.status === "undertime" ? "Undertime" : latestTimeRecord?.status === "excused" ? "Excused" : latestTimeRecord?.status === "absent" ? "Absent" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
                 </Badge>
               </div>
 
@@ -512,6 +522,11 @@ export default function EmployeeDashboard() {
                 ) : !todaySchedule && !assignedBranch ? (
                   <div className="text-center text-sm text-muted-foreground">
                     No schedule assigned — clock-in unavailable
+                  </div>
+                ) : latestTimeRecord?.status === "absent" || latestTimeRecord?.status === "excused" ? (
+                  <div className="text-center space-y-2">
+                    <Badge variant={latestTimeRecord?.status === "excused" ? "default" : "destructive"} className={latestTimeRecord?.status === "excused" ? "bg-green-600 hover:bg-green-700 text-white" : ""}>{latestTimeRecord?.status === "excused" ? "Excused" : "Absent"}</Badge>
+                    <p className="text-xs text-muted-foreground">{latestTimeRecord?.status === "excused" ? "Your absence has been excused" : "You have been marked absent for today"}</p>
                   </div>
                 ) : shiftExpired && (!latestTimeRecord || (latestTimeRecord.status !== "present" && latestTimeRecord.status !== "undertime")) ? (
                   <div className="text-center space-y-2">

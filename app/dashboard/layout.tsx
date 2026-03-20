@@ -122,7 +122,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
             <div className="flex flex-col h-full">
               <div className="py-4 border-b border-primary-600 mb-4">
                 <div className="flex items-center gap-3">
-                  <img src="/placeholder-logo.svg" alt="ShiftCrew" className="h-8 w-8" />
+                  <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16" />
                   <h1 className="text-2xl font-bold">ShiftCrew</h1>
                 </div>
               </div>
@@ -147,7 +147,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         <aside className="fixed inset-y-0 left-0 w-64 border-r border-primary-200 bg-primary p-4 flex flex-col">
           <div className="py-4 border-b border-primary-600 mb-4">
             <div className="flex items-center gap-3">
-              <img src="/placeholder-logo.svg" alt="ShiftCrew" className="h-8 w-8" />
+              <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16" />
               <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
             </div>
           </div>

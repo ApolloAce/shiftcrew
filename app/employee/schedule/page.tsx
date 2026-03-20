@@ -251,6 +251,9 @@ export default function EmployeeSchedulePage() {
       if (attendance.status === "undertime") {
         return <Badge className="bg-amber-500 hover:bg-amber-600 text-white text-[10px] px-1.5 py-0">Undertime</Badge>
       }
+      if (attendance.status === "excused") {
+        return <Badge className="bg-green-500 hover:bg-green-600 text-white text-[10px] px-1.5 py-0">Excused</Badge>
+      }
       return <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Absent</Badge>
     }
     // Past day with no attendance — check leave first
@@ -349,6 +352,7 @@ export default function EmployeeSchedulePage() {
               <Card className={`flex-1 border-t-0 rounded-t-none ${
                 attendance?.status === "present" ? "bg-green-50 dark:bg-green-950/20" :
                 attendance?.status === "undertime" ? "bg-amber-50 dark:bg-amber-950/20" :
+                attendance?.status === "excused" ? "bg-green-50 dark:bg-green-950/20" :
                 (isPast(day) && !attendance && isDayOnLeave(day)) ? "bg-orange-50 dark:bg-orange-950/20" :
                 (isPast(day) && !attendance) ? "bg-red-50 dark:bg-red-950/10" :
                 ""
@@ -420,6 +424,7 @@ export default function EmployeeSchedulePage() {
                     <div key={idx} className={`flex justify-between items-center p-4 border rounded-md ${
                       attendance?.status === "present" ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" :
                       attendance?.status === "undertime" ? "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800" :
+                      attendance?.status === "excused" ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" :
                       (isPast(day) && !attendance && isDayOnLeave(day)) ? "bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800" :
                       (isPast(day) && !attendance) ? "bg-red-50 dark:bg-red-950/10 border-red-200 dark:border-red-800" :
                       ""

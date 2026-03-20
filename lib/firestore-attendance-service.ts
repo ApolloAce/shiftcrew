@@ -5,7 +5,7 @@ export type AttendanceRecord = {
   employeeId: string
   employeeName?: string
   date: string
-  status: "present" | "absent"
+  status: "present" | "absent" | "undertime" | "excused"
   branchId?: string
   branchName?: string
   createdAt?: string

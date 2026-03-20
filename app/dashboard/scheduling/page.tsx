@@ -231,6 +231,7 @@ export default function SchedulingPage() {
   const [showWeekSchedule, setShowWeekSchedule] = useState(false)
   const [weekSchedules, setWeekSchedules] = useState<Record<string, any>>({})
   const [weekAttendance, setWeekAttendance] = useState<Record<string, Record<string, string>>>({})
+  const [todayExcusedIds, setTodayExcusedIds] = useState<Set<string>>(new Set())
 
   // Drag-and-drop states (ref is the reliable source — state is only for visual feedback)
   const draggedEmployeeRef = useRef<{ id: string; name: string; fromBranch: string | null } | null>(null)
@@ -492,6 +493,14 @@ export default function SchedulingPage() {
       }
       await Promise.all(fetches)
       setWeekAttendance(result)
+
+      // Fetch today's excused absences
+      const todayISO2 = formatDateLocal(new Date())
+      const absRes = await fetch(`/api/absences?date=${todayISO2}`).then(r => r.ok ? r.json() : [])
+      if (Array.isArray(absRes)) {
+        const excused = new Set<string>(absRes.filter((a: any) => a.status === "excused").map((a: any) => String(a.employeeId)))
+        setTodayExcusedIds(excused)
+      }
     } catch (err) {
       console.error("Error fetching week attendance:", err)
     }
@@ -1714,6 +1723,7 @@ export default function SchedulingPage() {
                           const att = weekAttendance[todayISO]?.[String(emp.id)]
                           if (att === "present") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Present</Badge>
                           if (att === "undertime") return <Badge className="text-[9px] px-1.5 py-0 bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400 border-cyan-300 whitespace-nowrap flex-shrink-0" variant="outline">Undertime</Badge>
+                          if (att === "excused") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Excused</Badge>
                           if (att === "absent") return <Badge className="text-[9px] px-1.5 py-0 bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 border-red-300 whitespace-nowrap flex-shrink-0" variant="outline">Absent</Badge>
                           return <Badge className="text-[9px] px-1.5 py-0 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 border-amber-300 whitespace-nowrap flex-shrink-0" variant="outline">Not Clocked In</Badge>
                         })()}
@@ -1812,6 +1822,7 @@ export default function SchedulingPage() {
                                 const att = weekAttendance[todayISO]?.[String(emp.id)]
                                 if (att === "present") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Present</Badge>
                                 if (att === "undertime") return <Badge className="text-[9px] px-1.5 py-0 bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400 border-cyan-300 whitespace-nowrap flex-shrink-0" variant="outline">Undertime</Badge>
+                                if (att === "excused") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Excused</Badge>
                                 if (att === "absent") return <Badge className="text-[9px] px-1.5 py-0 bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 border-red-300 whitespace-nowrap flex-shrink-0" variant="outline">Absent</Badge>
                                 return <Badge className="text-[9px] px-1.5 py-0 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 border-amber-300 whitespace-nowrap flex-shrink-0" variant="outline">Not Clocked In</Badge>
                               })()}
@@ -1920,6 +1931,7 @@ export default function SchedulingPage() {
                         if (status && status === "absent") {
                           uniqueAbsentIds.add(String(emp.employeeId))
                         }
+                        // Don't count excused as absent
                       })
                     })
                   }
@@ -1930,7 +1942,7 @@ export default function SchedulingPage() {
                     assignments.forEach((ba: any) => {
                       (ba.employees || []).forEach((emp: any) => {
                         const pStatus = dayAttendance[String(emp.employeeId)]
-                        if (pStatus === "present" || pStatus === "undertime") presentIds.add(String(emp.employeeId))
+                        if (pStatus === "present" || pStatus === "undertime" || pStatus === "excused") presentIds.add(String(emp.employeeId))
                       })
                     })
                   }

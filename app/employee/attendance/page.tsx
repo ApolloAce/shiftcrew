@@ -576,11 +576,13 @@ export default function EmployeeAttendancePage() {
                   <div className="text-center p-4 border rounded-md flex-1">
                     <div className="text-sm text-muted-foreground mb-1">Status</div>
                     <Badge
-                      variant={latestTimeRecord?.status === "present" || latestTimeRecord?.status === "undertime" ? "default" : "outline"}
-                      className={`text-lg px-3 py-1 ${isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
+                      variant={latestTimeRecord?.status === "present" || latestTimeRecord?.status === "undertime" || latestTimeRecord?.status === "excused" ? "default" : "outline"}
+                      className={`text-lg px-3 py-1 ${isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-500 hover:bg-green-600" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
                     >
                       {isOnLeave
                         ? "On Leave"
+                        : latestTimeRecord?.status === "excused"
+                        ? "Excused"
                         : latestTimeRecord?.status === "present"
                         ? latestTimeRecord?.timeOut ? "Completed" : "Present"
                         : latestTimeRecord?.status === "undertime"
@@ -694,6 +696,9 @@ export default function EmployeeAttendancePage() {
                       } else if (attendance.status === "undertime") {
                         bgColor = "bg-amber-100 dark:bg-amber-900/30"
                         indicator = "⏱"
+                      } else if (attendance.status === "excused") {
+                        bgColor = "bg-green-100 dark:bg-green-900/30"
+                        indicator = "E"
                       } else {
                         bgColor = "bg-red-100 dark:bg-red-900/30"
                         indicator = "✗"
@@ -740,10 +745,10 @@ export default function EmployeeAttendancePage() {
                             </div>
                           </div>
                           <Badge
-                            variant={record.status === "present" || record.status === "undertime" ? "default" : "outline"}
-                            className={record.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}
+                            variant={record.status === "present" || record.status === "undertime" || record.status === "excused" ? "default" : "outline"}
+                            className={record.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : record.status === "excused" ? "bg-green-500 hover:bg-green-600" : ""}
                           >
-                            {record.status === "present" ? "Present" : record.status === "undertime" ? "Undertime" : record.status || "Unknown"}
+                            {record.status === "present" ? "Present" : record.status === "undertime" ? "Undertime" : record.status === "excused" ? "Excused" : record.status || "Unknown"}
                           </Badge>
                         </div>
                       ))}

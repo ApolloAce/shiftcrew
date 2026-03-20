@@ -29,7 +29,7 @@ export async function GET(req: Request) {
     const rows = await query(sql, params);
 
     if (stats === "true" && date) {
-      const presentCount = rows.filter((r: any) => r.status === "present").length;
+      const presentCount = rows.filter((r: any) => r.status === "present" || r.status === "excused").length;
       const absentCount = rows.filter((r: any) => r.status === "absent").length;
       const totalRecords = rows.length;
       const attendancePercentage = totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 0;

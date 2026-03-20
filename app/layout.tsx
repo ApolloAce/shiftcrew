@@ -9,7 +9,11 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata = {
   title: "ShiftCrew - Crew Management System",
   description: "Manage your crew members efficiently",
-    generator: 'v0.app'
+  generator: 'v0.app',
+  icons: {
+    icon: '/placeholder-logo.png',
+    apple: '/placeholder-logo.png',
+  },
 }
 
 export default function RootLayout({

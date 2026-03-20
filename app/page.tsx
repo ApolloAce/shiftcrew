@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Eye, EyeOff } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -21,6 +22,7 @@ export default function LoginPage() {
     rememberMe: false,
   })
   const [loginError, setLoginError] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
 
   // Clear any store errors and set them to our local state
   useEffect(() => {
@@ -97,17 +99,28 @@ export default function LoginPage() {
 
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-secondary-50 to-secondary-200 p-4">
-      <Card className="w-full max-w-md shadow-xl transition-transform duration-300 hover:-translate-y-1 border-primary-200">
-        <CardHeader className="text-center space-y-1 bg-primary text-primary-foreground rounded-t-lg">
-          <CardTitle className="text-4xl font-bold">ShiftCrew</CardTitle>
-          <CardDescription className="text-lg text-primary-foreground/90">Crew Management System</CardDescription>
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden p-4">
+      {/* Background matching sidebar color */}
+      <div className="absolute inset-0 bg-[#4e7a8e]" />
+      {/* Subtle decorative shapes */}
+      <div className="absolute top-0 left-0 w-72 h-72 bg-white/5 rounded-full -translate-x-1/3 -translate-y-1/3 blur-3xl" />
+      <div className="absolute bottom-0 right-0 w-96 h-96 bg-black/10 rounded-full translate-x-1/4 translate-y-1/4 blur-3xl" />
+      <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-white/5 rounded-full -translate-x-1/2 -translate-y-1/2 blur-2xl" />
+
+      <Card className="w-full max-w-sm shadow-2xl border-0 backdrop-blur-sm bg-white/95 dark:bg-slate-900/95 relative z-10">
+        <CardHeader className="text-center pb-2 pt-8">
+          <div className="mx-auto mb-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16 rounded-xl object-contain mx-auto drop-shadow-md" />
+          </div>
+          <CardTitle className="text-2xl font-bold tracking-tight">ShiftCrew</CardTitle>
+          <CardDescription className="text-sm text-muted-foreground">Crew Management System</CardDescription>
         </CardHeader>
 
-        <CardContent className="pt-6 bg-secondary-50">
-          <form onSubmit={handleLogin} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="username">Username or Email</Label>
+        <CardContent className="pt-4 pb-6 px-6">
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="email" className="text-sm">Username or Email</Label>
               <Input
                 id="email"
                 name="email"
@@ -116,22 +129,32 @@ export default function LoginPage() {
                 value={loginForm.email}
                 onChange={handleInputChange}
                 required
-                className="border-primary-200 focus-visible:ring-primary"
+                className="h-10"
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                placeholder="Enter your password"
-                value={loginForm.password}
-                onChange={handleInputChange}
-                required
-                className="border-primary-200 focus-visible:ring-primary"
-              />
+            <div className="space-y-1.5">
+              <Label htmlFor="password" className="text-sm">Password</Label>
+              <div className="relative">
+                <Input
+                  id="password"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter your password"
+                  value={loginForm.password}
+                  onChange={handleInputChange}
+                  required
+                  className="h-10 pr-10"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={() => setShowPassword(v => !v)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center space-x-2">
@@ -139,7 +162,6 @@ export default function LoginPage() {
                 id="rememberMe"
                 checked={loginForm.rememberMe}
                 onCheckedChange={handleCheckboxChange}
-                className="border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
               />
               <Label htmlFor="rememberMe" className="text-sm font-normal">
                 Remember me
@@ -152,13 +174,15 @@ export default function LoginPage() {
               </Alert>
             )}
 
-            <Button type="submit" className="w-full bg-primary text-primary-foreground hover:bg-primary-600">
+            <Button type="submit" className="w-full h-10 bg-teal-600 hover:bg-teal-700 text-white">
               Log In
             </Button>
           </form>
         </CardContent>
 
-
+        <CardFooter className="justify-center pb-6 pt-0">
+          <p className="text-xs text-muted-foreground">&copy; {new Date().getFullYear()} ShiftCrew. All rights reserved.</p>
+        </CardFooter>
       </Card>
     </div>
   )
