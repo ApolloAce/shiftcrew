@@ -663,6 +663,7 @@ export default function EmployeeAttendancePage() {
                 <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/30 border"></span> Undertime</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Excused</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-100 dark:bg-orange-900/30 border"></span> On Leave</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
                 </div>
@@ -695,7 +696,7 @@ export default function EmployeeAttendancePage() {
                         indicator = "✓"
                       } else if (attendance.status === "undertime") {
                         bgColor = "bg-amber-100 dark:bg-amber-900/30"
-                        indicator = "⏱"
+                        indicator = "U"
                       } else if (attendance.status === "excused") {
                         bgColor = "bg-green-100 dark:bg-green-900/30"
                         indicator = "E"

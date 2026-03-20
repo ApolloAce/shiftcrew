@@ -143,13 +143,13 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
                   <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16" />
                   <h1 className="text-2xl font-bold">ShiftCrew</h1>
                 </div>
-                <p className="text-sm text-primary-foreground/80 mt-1">Employee Portal</p>
               </div>
               <NavLinks />
               <div className="mt-auto pt-4 border-t border-primary-600">
                 <div className="mb-2">
                   <div className="font-medium">
                     {currentUser.firstName} {currentUser.surname}
+                    <p className="text-xs text-primary-foreground/60 capitalize">{currentUser.type}</p>
                   </div>
                   <div className="text-sm text-primary-foreground/80">{currentUser.type}</div>
                 </div>
@@ -172,7 +172,6 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
               <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16" />
               <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
             </div>
-            <p className="text-sm text-primary-foreground/80 mt-1">Employee Portal</p>
           </div>
           <NavLinks />
           <div className="mt-auto pt-4 border-t border-primary-600">
