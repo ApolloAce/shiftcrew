@@ -277,17 +277,6 @@ export default function EmployeeAttendancePage() {
       const today = toLocalDateISO(now)
       const timeIn = now.toTimeString().slice(0, 8)
 
-      // Determine if employee is clocking in late (undertime)
-      let clockInStatus = "present"
-      if (todaySchedule?.startTime) {
-        const [sh, sm] = todaySchedule.startTime.split(":").map(Number)
-        const schedStart = sh * 60 + sm
-        const nowMin = now.getHours() * 60 + now.getMinutes()
-        if (nowMin > schedStart) {
-          clockInStatus = "undertime"
-        }
-      }
-
       const res = await fetch("/api/attendance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -296,7 +285,7 @@ export default function EmployeeAttendancePage() {
           employeeId: currentUser.id,
           employeeName: `${currentUser.firstName} ${currentUser.surname}`,
           date: today,
-          status: clockInStatus,
+          status: "present",
           timeIn,
           latitude: currentLocation?.latitude || null,
           longitude: currentLocation?.longitude || null,
@@ -311,13 +300,8 @@ export default function EmployeeAttendancePage() {
           showNotification("info", "Already Clocked In", `You already clocked in today at ${formatTime(data.timeIn)}.`)
           setLatestTimeRecord((prev: any) => ({ ...prev, date: today, timeIn: data.timeIn, status: prev?.status || "present" }))
         } else {
-          setLatestTimeRecord({ date: today, status: clockInStatus, timeIn: data.timeIn || timeIn })
-          if (clockInStatus === "undertime") {
-            const schedStartFormatted = todaySchedule?.startTime ? formatTime(todaySchedule.startTime) : "N/A"
-            showNotification("info", "Undertime", `Clocked in at ${formatTime(data.timeIn || timeIn)} — schedule started at ${schedStartFormatted}. Marked as Undertime.`)
-          } else {
-            showNotification("success", "Clock In Success", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}!`)
-          }
+          setLatestTimeRecord({ date: today, status: "present", timeIn: data.timeIn || timeIn })
+          showNotification("success", "Clock In Success", `You have successfully clocked in at ${formatTime(data.timeIn || timeIn)}!`)
         }
         setShowClockInModal(false)
         if (currentUser) fetchAttendanceData(currentUser)
@@ -361,9 +345,13 @@ export default function EmployeeAttendancePage() {
 
       if (res.ok) {
         const data = await res.json()
-        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut }))
+        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut, status: data.status || prev?.status }))
         setShowClockOutModal(false)
-        showNotification("success", "Clock Out Success", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}!`)
+        if (data.status === "undertime") {
+          showNotification("info", "Undertime", `Clocked out at ${formatTime(data.timeOut || timeOut)} — total work time is less than 9 hours. Marked as Undertime.`)
+        } else {
+          showNotification("success", "Clock Out Success", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}!`)
+        }
         if (currentUser) fetchAttendanceData(currentUser)
       } else {
         const err = await res.json().catch(() => ({}))

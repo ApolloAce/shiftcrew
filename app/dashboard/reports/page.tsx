@@ -2,412 +2,168 @@
 
 import { useState, useMemo, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllBranches } from "@/lib/firestore-branch-service"
-import { getSchedulesForDate } from "@/lib/firestore-schedule-service"
 import { getAttendanceForDateRange } from "@/lib/firestore-attendance-service"
-import { CheckCircle2, XCircle, BarChart2, Users, MapPin, Calendar } from "lucide-react"
-import { Chart, ChartContainer } from "@/components/ui/chart"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { format, subDays, isWeekend, isToday, isBefore, startOfDay, subMonths } from "date-fns"
-import { BasicDatePicker } from "@/components/ui/basic-date-picker"
 import { getAllLeaveRequests } from "@/lib/firestore-leave-service"
+import { Chart, ChartContainer } from "@/components/ui/chart"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Search, Users, CheckCircle, XCircle, Clock, Calendar, Building, FileText, ChevronLeft, ChevronRight, TrendingUp, BarChart3 } from "lucide-react"
+import { format } from "date-fns"
+
+function getMonday(date: Date) {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function getDateString(date: Date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, "0")
+  const d = String(date.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
+}
+
+function getScheduledEmployeesFromSchedule(schedule: any) {
+  const rows: Array<{ employeeId: string; employeeName?: string; branchName: string }> = []
+  if (schedule?.branchAssignments?.length) {
+    for (const branch of schedule.branchAssignments) {
+      for (const emp of branch.employees || []) {
+        rows.push({ employeeId: String(emp.employeeId), employeeName: emp.employeeName, branchName: branch.branchName || "Unassigned" })
+      }
+    }
+    return rows
+  }
+  if (schedule?.assignments?.length) {
+    for (const emp of schedule.assignments) {
+      rows.push({ employeeId: String(emp.employeeId), employeeName: emp.employeeName, branchName: emp.branchName || "Unassigned" })
+    }
+  }
+  return rows
+}
 
 export default function ReportsPage() {
-  const [branches, setBranches] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
+  const [branches, setBranches] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [weekStartDate, setWeekStartDate] = useState<Date>(() => {
-    const today = new Date()
-    const day = today.getDay()
-    const diff = today.getDate() - day + (day === 0 ? -6 : 1)
-    return new Date(today.setDate(diff))
-  })
   const [activeTab, setActiveTab] = useState("attendance")
-  const [timeRange, setTimeRange] = useState<"day" | "week" | "month">("week")
-  const [leavePeriod, setLeavePeriod] = useState<"weekly" | "monthly" | "annually">("monthly")
+  const [timeRange, setTimeRange] = useState<"day" | "week" | "month">("day")
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([])
   const [weekSchedules, setWeekSchedules] = useState<any[]>([])
   const [weekAttendance, setWeekAttendance] = useState<any[]>([])
   const [trendSchedules, setTrendSchedules] = useState<any[]>([])
   const [trendAttendance, setTrendAttendance] = useState<any[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
+  const [attendanceFilter, setAttendanceFilter] = useState<"all" | "present" | "absent" | "undertime">("all")
+  const [currentPage, setCurrentPage] = useState(1)
+  const ITEMS_PER_PAGE = 15
+  const [weekStartDate, setWeekStartDate] = useState<Date>(() => getMonday(new Date()))
 
-  // Fetch Firestore data on mount
+  // Fetch base data — each independently so one failure doesn't cascade
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        setIsLoading(true)
-        const [emps, brs] = await Promise.all([getActiveEmployees(), getAllBranches()])
-        console.log("Reports: Fetched employees from Firestore", emps)
-        console.log("Reports: Fetched branches from Firestore", brs)
-        setEmployees(emps)
-        setBranches(brs)
-      } catch (error) {
-        console.error("Reports: Error fetching data from Firestore:", error)
-      } finally {
-        setIsLoading(false)
-      }
+      setIsLoading(true)
+      try { setEmployees(await getActiveEmployees()) } catch (e) { console.error("Reports: Error fetching employees:", e) }
+      try { setBranches(await getAllBranches()) } catch (e) { console.error("Reports: Error fetching branches:", e) }
+      try { setLeaveRequests(await getAllLeaveRequests()) } catch (e) { console.error("Reports: Error fetching leaves:", e) }
+      setIsLoading(false)
     }
     fetchData()
   }, [])
 
-  // Use employees from Firestore
-  const crews = employees
-
-  const crewsWithSampleLeaves = useMemo(() => {
-    return crews.map((crew: any) => ({
-      ...crew,
-      leaveRequests: [
-        {
-          id: 1,
-          crewId: crew.id,
-          startDate: "2025-01-10",
-          endDate: "2025-01-12",
-          reason: "Personal",
-          status: "approved" as const,
-          type: "personal" as const,
-          createdAt: "2025-01-01",
-        },
-        {
-          id: 2,
-          crewId: crew.id,
-          startDate: "2025-02-14",
-          endDate: "2025-02-16",
-          reason: "Sick Leave",
-          status: "approved" as const,
-          type: "sick" as const,
-          createdAt: "2025-02-01",
-        },
-        {
-          id: 3,
-          crewId: crew.id,
-          startDate: "2025-03-05",
-          endDate: "2025-03-07",
-          reason: "Vacation",
-          status: "approved" as const,
-          type: "vacation" as const,
-          createdAt: "2025-02-20",
-        },
-        {
-          id: 4,
-          crewId: crew.id,
-          startDate: "2025-04-12",
-          endDate: "2025-04-14",
-          reason: "Family",
-          status: "pending" as const,
-          type: "personal" as const,
-          createdAt: "2025-04-01",
-        },
-        {
-          id: 5,
-          crewId: crew.id,
-          startDate: "2025-05-20",
-          endDate: "2025-05-22",
-          reason: "Vacation",
-          status: "approved" as const,
-          type: "vacation" as const,
-          createdAt: "2025-05-05",
-        },
-        {
-          id: 6,
-          crewId: crew.id,
-          startDate: "2025-06-10",
-          endDate: "2025-06-12",
-          reason: "Medical",
-          status: "approved" as const,
-          type: "sick" as const,
-          createdAt: "2025-06-01",
-        },
-        {
-          id: 7,
-          crewId: crew.id,
-          startDate: "2025-07-25",
-          endDate: "2025-07-27",
-          reason: "Vacation",
-          status: "approved" as const,
-          type: "vacation" as const,
-          createdAt: "2025-07-10",
-        },
-        {
-          id: 8,
-          crewId: crew.id,
-          startDate: "2025-08-15",
-          endDate: "2025-08-17",
-          reason: "Personal",
-          status: "rejected" as const,
-          type: "personal" as const,
-          createdAt: "2025-08-01",
-        },
-        {
-          id: 9,
-          crewId: crew.id,
-          startDate: "2025-09-08",
-          endDate: "2025-09-10",
-          reason: "Sick Leave",
-          status: "approved" as const,
-          type: "sick" as const,
-          createdAt: "2025-09-01",
-        },
-        {
-          id: 10,
-          crewId: crew.id,
-          startDate: "2025-10-18",
-          endDate: "2025-10-20",
-          reason: "Vacation",
-          status: "approved" as const,
-          type: "vacation" as const,
-          createdAt: "2025-10-05",
-        },
-        {
-          id: 11,
-          crewId: crew.id,
-          startDate: "2025-11-05",
-          endDate: "2025-11-07",
-          reason: "Personal",
-          status: "pending" as const,
-          type: "personal" as const,
-          createdAt: "2025-11-01",
-        },
-        {
-          id: 12,
-          crewId: crew.id,
-          startDate: "2025-12-22",
-          endDate: "2025-12-26",
-          reason: "Holiday Vacation",
-          status: "approved" as const,
-          type: "vacation" as const,
-          createdAt: "2025-12-01",
-        },
-      ],
-    }))
-  }, [crews])
-
-  // Firestore leave requests state
-  const [leaveRequests, setLeaveRequests] = useState<any[]>([])
-
-  // Fetch leave requests from Firestore
-  useEffect(() => {
-    const fetchLeaves = async () => {
-      try {
-        const leaves = await getAllLeaveRequests()
-        console.log('Reports: fetched leave requests', leaves.length)
-        setLeaveRequests(leaves)
-      } catch (error) {
-        console.error('Error fetching leave requests:', error)
-        setLeaveRequests([])
-      }
-    }
-    fetchLeaves()
-  }, [])
-
-  // Helper function to get employees for a branch
-  const getCrewsForBranch = (branchId: string | number) => {
-    return crews.filter((emp) => emp.branchId && String(emp.branchId) === String(branchId))
-  }
-
-  // Calculate crew distribution data
-  const fullTimeCount = crews.filter((crew) => crew.type === "full-time").length
-  const partTimeCount = crews.filter((crew) => crew.type === "part-time").length
-  const unassignedCount =
-    crews.length -
-    crews.filter((crew) => {
-      for (const branch of branches) {
-        if (getCrewsForBranch(branch.id).some((c) => String(c.id) === String(crew.id))) {
-          return true
-        }
-      }
-      return false
-    }).length
-
-  // Format data for crew distribution pie chart
-  const crewDistributionData = {
-    labels: ["Full-Time", "Part-Time", "Unassigned"],
-    datasets: [
-      {
-        label: "Crew Distribution",
-        data: [fullTimeCount, partTimeCount, unassignedCount],
-        backgroundColor: [
-          "rgba(14, 165, 233, 0.7)", // blue
-          "rgba(139, 92, 246, 0.7)", // purple
-          "rgba(245, 158, 11, 0.7)", // amber
-        ],
-        borderColor: ["rgba(14, 165, 233, 1)", "rgba(139, 92, 246, 1)", "rgba(245, 158, 11, 1)"],
-        borderWidth: 1,
-      },
-    ],
-  }
-
-  // Chart options
-  const chartOptions = {
-    responsive: true,
-    plugins: {
-      legend: {
-        position: "bottom" as const,
-      },
-      tooltip: {
-        callbacks: {
-          label: (context: any) => {
-            const label = context.label || ""
-            const value = context.raw || 0
-            const total = context.dataset.data.reduce((a: number, b: number) => a + b, 0)
-            const percentage = total > 0 ? Math.round((value / total) * 100) : 0
-            return `${label}: ${value} (${percentage}%)`
-          },
-        },
-      },
-    },
-  }
-
-  // Helper function to get assigned branch
-  function getAssignedBranch(crewId: string | number) {
-    return branches.find((branch) => getCrewsForBranch(branch.id).some((c) => String(c.id) === String(crewId)))
-  }
-
-  // Helper function to get week start (Monday) from a date
-  const getWeekStart = (date: Date): Date => {
-    const d = new Date(date)
-    const day = d.getDay()
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-    return new Date(d.setDate(diff))
-  }
-
-  // Helper function to get the date string from a date
-  const getDateString = (date: Date): string => {
-    return date.toISOString().split('T')[0]
-  }
-
-  // Normalize schedule payloads: support both branchAssignments and legacy assignments.
-  const getScheduledEmployeesFromSchedule = (schedule: any) => {
-    const rows: Array<{ employeeId: string; employeeName?: string; branchName: string }> = []
-
-    if (schedule?.branchAssignments && Array.isArray(schedule.branchAssignments) && schedule.branchAssignments.length > 0) {
-      for (const branch of schedule.branchAssignments) {
-        const branchName = branch.branchName || "Unassigned"
-        const employees = Array.isArray(branch.employees) ? branch.employees : []
-        for (const emp of employees) {
-          rows.push({
-            employeeId: String(emp.employeeId),
-            employeeName: emp.employeeName,
-            branchName,
-          })
-        }
-      }
-      return rows
-    }
-
-    if (schedule?.assignments && Array.isArray(schedule.assignments) && schedule.assignments.length > 0) {
-      for (const emp of schedule.assignments) {
-        rows.push({
-          employeeId: String(emp.employeeId),
-          employeeName: emp.employeeName,
-          branchName: emp.branchName || "Unassigned",
-        })
-      }
-    }
-
-    return rows
-  }
-
-  // Fetch schedules and real attendance for the entire week (Monday to Sunday)
+  // Fetch weekly schedules + attendance independently
   useEffect(() => {
     const fetchWeekData = async () => {
+      const weekEnd = new Date(weekStartDate)
+      weekEnd.setDate(weekEnd.getDate() + 6)
+      const startStr = getDateString(weekStartDate)
+      const endStr = getDateString(weekEnd)
+
+      // Fetch schedules
       try {
-        // Calculate week end (Sunday)
-        const weekEnd = new Date(weekStartDate)
-        weekEnd.setDate(weekEnd.getDate() + 6)
-        const weekStartStr = getDateString(weekStartDate)
-        const weekEndStr = getDateString(weekEnd)
-
-        // Fetch schedules by weekStart (single query)
-        let allWeekSchedules: any[] = []
-        try {
-          const res = await fetch(`/api/schedules?weekStart=${weekStartStr}`)
-          if (res.ok) {
-            const schedules = await res.json()
-            // Deduplicate by scheduleFor, keeping latest per day
-            const byDate: Record<string, any> = {}
-            for (const sched of schedules) {
-              const targetDate = sched.scheduleFor || sched.date
-              const existing = byDate[targetDate]
-              if (!existing || new Date(sched.updatedAt || sched.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
-                byDate[targetDate] = sched
-              }
+        const res = await fetch(`/api/schedules?weekStart=${startStr}`)
+        if (res.ok) {
+          const schedulesRes = await res.json()
+          const byDate: Record<string, any> = {}
+          for (const s of schedulesRes) {
+            const d = s.scheduleFor || s.date
+            const existing = byDate[d]
+            if (!existing || new Date(s.updatedAt || s.createdAt || 0) > new Date(existing.updatedAt || existing.createdAt || 0)) {
+              byDate[d] = s
             }
-            allWeekSchedules = Object.values(byDate)
           }
-        } catch (e) {
-          console.warn('Error fetching week schedules:', e)
+          setWeekSchedules(Object.values(byDate))
+        } else {
+          setWeekSchedules([])
         }
-
-        // Fetch real attendance from daily_attendance table
-        let attendanceRecords: any[] = []
-        try {
-          attendanceRecords = await getAttendanceForDateRange(weekStartStr, weekEndStr)
-        } catch (e) {
-          console.warn('Error fetching week attendance:', e)
-        }
-
-        setWeekSchedules(allWeekSchedules)
-        setWeekAttendance(attendanceRecords)
-        console.log('Week schedules loaded:', allWeekSchedules.length, 'days, attendance:', attendanceRecords.length, 'records')
-      } catch (error) {
-        console.error('Error fetching week data:', error)
+      } catch (e) {
+        console.warn("Error fetching week schedules:", e)
         setWeekSchedules([])
+      }
+
+      // Fetch attendance
+      try {
+        setWeekAttendance(await getAttendanceForDateRange(startStr, endStr))
+      } catch (e) {
+        console.warn("Error fetching week attendance:", e)
         setWeekAttendance([])
       }
     }
     fetchWeekData()
   }, [weekStartDate])
 
-  // Fetch historical data for trend charts.
-  // Weekly chart needs multiple weeks; monthly chart needs a broader date range.
+  // Fetch trend data independently
   useEffect(() => {
     const fetchTrendData = async () => {
+      let rangeStart = new Date(weekStartDate)
+      let rangeEnd = new Date(weekStartDate)
+      rangeEnd.setDate(rangeEnd.getDate() + 6)
+
+      if (timeRange === "week") {
+        rangeStart = new Date(weekStartDate)
+        rangeStart.setDate(rangeStart.getDate() - 21)
+      } else if (timeRange === "month") {
+        rangeStart = new Date(weekStartDate.getFullYear(), 0, 1)
+        rangeEnd = new Date(weekStartDate.getFullYear(), 11, 31)
+      }
+
+      const startStr = getDateString(rangeStart)
+      const endStr = getDateString(rangeEnd)
+
+      // Fetch trend schedules
       try {
-        let rangeStart = new Date(weekStartDate)
-        let rangeEnd = new Date(weekStartDate)
-        rangeEnd.setDate(rangeEnd.getDate() + 6)
-
-        if (timeRange === "week") {
-          rangeStart = new Date(weekStartDate)
-          rangeStart.setDate(rangeStart.getDate() - 21)
-        } else if (timeRange === "month") {
-          rangeStart = new Date(weekStartDate.getFullYear(), 0, 1)
-          rangeEnd = new Date(weekStartDate.getFullYear(), 11, 31)
-        }
-
-        const startStr = getDateString(rangeStart)
-        const endStr = getDateString(rangeEnd)
-
-        const [schedulesRes, attendanceRecords] = await Promise.all([
-          fetch(`/api/schedules?startDate=${startStr}&endDate=${endStr}`),
-          getAttendanceForDateRange(startStr, endStr),
-        ])
-
-        let schedules: any[] = []
-        if (schedulesRes.ok) {
-          schedules = await schedulesRes.json()
-        }
-
-        setTrendSchedules(schedules)
-        setTrendAttendance(attendanceRecords)
-      } catch (error) {
-        console.error("Error fetching trend data:", error)
+        const res = await fetch(`/api/schedules?startDate=${startStr}&endDate=${endStr}`)
+        if (res.ok) setTrendSchedules(await res.json())
+        else setTrendSchedules([])
+      } catch (e) {
+        console.warn("Error fetching trend schedules:", e)
         setTrendSchedules([])
+      }
+
+      // Fetch trend attendance
+      try {
+        setTrendAttendance(await getAttendanceForDateRange(startStr, endStr))
+      } catch (e) {
+        console.warn("Error fetching trend attendance:", e)
         setTrendAttendance([])
       }
     }
-
     fetchTrendData()
   }, [timeRange, weekStartDate])
 
-  // Build a lookup: employeeId_date -> "present"|"absent" from real attendance records
+  // Attendance lookup maps
   const attendanceLookup = useMemo(() => {
     const lookup: Record<string, string> = {}
     for (const rec of weekAttendance) {
-      const dateStr = typeof rec.date === 'string' && rec.date.includes('T') ? rec.date.split('T')[0] : rec.date
+      const dateStr = typeof rec.date === "string" && rec.date.includes("T") ? rec.date.split("T")[0] : rec.date
       lookup[`${rec.employeeId}_${dateStr}`] = rec.status
     }
     return lookup
@@ -422,938 +178,804 @@ export default function ReportsPage() {
     return lookup
   }, [trendAttendance])
 
-  // Generate historical attendance data for the entire week
-  // Cross-references schedule assignments with actual daily_attendance records.
-  // This list is intentionally NOT grouped by branch.
+  // Employee attendance rows for the week
   const attendanceHistory = useMemo(() => {
-    const rows: any[] = []
-
-    // Count attendance across the week using REAL attendance data.
-    // Track only employees that are actually scheduled for the selected week.
-    const employeeAttendance: Record<string, { present: number; total: number; branchName: string; employeeName?: string }> = {}
+    const employeeAtt: Record<string, { present: number; undertime: number; total: number; branchName: string; employeeName?: string }> = {}
 
     weekSchedules.forEach((schedule: any) => {
       const scheduleDate = schedule?.scheduleFor || schedule?.date
       if (!scheduleDate) return
+      const scheduledEmps = getScheduledEmployeesFromSchedule(schedule)
+      const seen = new Set<string>()
 
-      const scheduledEmployees = getScheduledEmployeesFromSchedule(schedule)
-      const seenForDay = new Set<string>()
+      scheduledEmps.forEach((emp) => {
+        const key = `${emp.employeeId}_${scheduleDate}`
+        if (seen.has(key)) return
+        seen.add(key)
 
-      scheduledEmployees.forEach((emp) => {
-        // Guard against duplicate employee rows for the same day.
-        const dayKey = `${emp.employeeId}_${scheduleDate}`
-        if (seenForDay.has(dayKey)) return
-        seenForDay.add(dayKey)
-
-        if (!employeeAttendance[emp.employeeId]) {
-          employeeAttendance[emp.employeeId] = {
-            present: 0,
-            total: 0,
-            branchName: emp.branchName || "Unassigned",
-            employeeName: emp.employeeName,
-          }
+        if (!employeeAtt[emp.employeeId]) {
+          employeeAtt[emp.employeeId] = { present: 0, undertime: 0, total: 0, branchName: emp.branchName, employeeName: emp.employeeName }
         }
+        employeeAtt[emp.employeeId].total++
+        employeeAtt[emp.employeeId].branchName = emp.branchName || employeeAtt[emp.employeeId].branchName
+        if (emp.employeeName) employeeAtt[emp.employeeId].employeeName = emp.employeeName
 
-        employeeAttendance[emp.employeeId].total++
-        employeeAttendance[emp.employeeId].branchName = emp.branchName || employeeAttendance[emp.employeeId].branchName
-        if (emp.employeeName) employeeAttendance[emp.employeeId].employeeName = emp.employeeName
-
-        const realStatus = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
-        if (realStatus === "present") {
-          employeeAttendance[emp.employeeId].present++
-        }
+        const status = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
+        if (status === "present") employeeAtt[emp.employeeId].present++
+        else if (status === "undertime") employeeAtt[emp.employeeId].undertime++
       })
     })
 
-    // Build attendance history from scheduled employee week data only.
-    Object.entries(employeeAttendance).forEach(([employeeId, attendance]) => {
-      if (attendance.total <= 0) return
-
-      const crew = crews.find((c: any) => String(c.id) === String(employeeId))
-      const assignedBranch = crew ? getAssignedBranch(crew.id) : null
-      const branchName = attendance.branchName || (assignedBranch ? assignedBranch.branchName : "Unassigned")
-
-      const displayName = crew
-        ? `${crew.firstName || ""} ${crew.surname || ""}`.trim() || attendance.employeeName || `Employee ${employeeId}`
-        : attendance.employeeName || `Employee ${employeeId}`
-
-      rows.push({
-        ...(crew || { id: employeeId }),
-        id: crew?.id || employeeId,
-        branchName,
-        displayName,
-        wasPresent: attendance.present > 0,
-        presentDays: attendance.present,
-        totalDays: attendance.total,
+    return Object.entries(employeeAtt)
+      .filter(([employeeId, att]) => {
+        if (att.total <= 0) return false
+        const crew = employees.find((c: any) => String(c.id) === String(employeeId))
+        if (crew?.archived) return false
+        return true
       })
-    })
-
-    return rows
-      .filter((emp: any) => (emp.totalDays || 0) > 0)
-      .sort((a: any, b: any) => {
+      .map(([employeeId, att]) => {
+        const crew = employees.find((c: any) => String(c.id) === String(employeeId))
+        const displayName = crew
+          ? `${crew.firstName || ""} ${crew.surname || ""}`.trim() || att.employeeName || `Employee ${employeeId}`
+          : att.employeeName || `Employee ${employeeId}`
+        const employeeCode = crew?.employeeCode || ""
+        return {
+          id: employeeId,
+          displayName,
+          employeeCode,
+          branchName: att.branchName,
+          presentDays: att.present + att.undertime,
+          undertimeDays: att.undertime,
+          totalDays: att.total,
+          absentDays: att.total - att.present - att.undertime,
+          wasPresent: att.present > 0 || att.undertime > 0,
+          hasUndertime: att.undertime > 0,
+        }
+      })
+      .sort((a, b) => {
         if (a.wasPresent !== b.wasPresent) return Number(b.wasPresent) - Number(a.wasPresent)
-        return (a.displayName || "").localeCompare(b.displayName || "")
+        return a.displayName.localeCompare(b.displayName)
       })
-  }, [weekSchedules, weekAttendance, attendanceLookup, crews, branches])
+  }, [weekSchedules, weekAttendance, attendanceLookup, employees])
 
-  // Calculate overall attendance for the week
-  const overallAttendance = useMemo(() => {
-    const presentCount = attendanceHistory.filter((emp: any) => emp.wasPresent).length
-    const totalCount = attendanceHistory.length
-    const rate = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0
+  // Filter & paginate attendance
+  const filteredAttendance = useMemo(() => {
+    let list = attendanceHistory
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(e => e.displayName.toLowerCase().includes(q) || e.branchName.toLowerCase().includes(q) || (e.employeeCode || "").toLowerCase().includes(q))
+    }
+    if (attendanceFilter === "present") list = list.filter(e => e.wasPresent && !e.hasUndertime)
+    else if (attendanceFilter === "absent") list = list.filter(e => !e.wasPresent)
+    else if (attendanceFilter === "undertime") list = list.filter(e => e.hasUndertime)
+    return list
+  }, [attendanceHistory, searchQuery, attendanceFilter])
 
-    return { presentCount, totalCount, rate, absentCount: totalCount - presentCount }
+  const totalPages = Math.max(1, Math.ceil(filteredAttendance.length / ITEMS_PER_PAGE))
+  const safePage = Math.min(currentPage, totalPages)
+  const paginatedAttendance = filteredAttendance.slice((safePage - 1) * ITEMS_PER_PAGE, safePage * ITEMS_PER_PAGE)
+
+  // Summary stats
+  const summary = useMemo(() => {
+    const present = attendanceHistory.filter(e => e.wasPresent && !e.hasUndertime).length
+    const undertime = attendanceHistory.filter(e => e.hasUndertime).length
+    const total = attendanceHistory.length
+    const absent = total - present - undertime
+    const rate = total > 0 ? Math.round(((present + undertime) / total) * 100) : 0
+    return { present, undertime, absent, total, rate }
   }, [attendanceHistory])
 
-  // Calculate crew allocation by branch from schedules + real attendance
-  const crewAllocationByBranch = useMemo(() => {
-    const allocationMap = new Map<string, { fullTime: number; partTime: number; total: number; presentCount: number }>()
+  // Branch allocation
+  const branchAllocation = useMemo(() => {
+    const map = new Map<string, { fullTime: number; partTime: number; total: number; present: number }>()
+    branches.forEach(b => map.set(b.branchName, { fullTime: 0, partTime: 0, total: 0, present: 0 }))
 
-    // Initialize map for all branches
-    branches.forEach((branch) => {
-      allocationMap.set(branch.branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
-    })
-
-    // Count employees by type from all schedules
     weekSchedules.forEach((schedule: any) => {
       const scheduleDate = schedule?.scheduleFor || schedule?.date
       if (!scheduleDate) return
-
       const rows = getScheduledEmployeesFromSchedule(schedule)
-      const seenForDayBranch = new Set<string>()
-
-      rows.forEach((emp) => {
-        const dedupeKey = `${emp.employeeId}_${emp.branchName}_${scheduleDate}`
-        if (seenForDayBranch.has(dedupeKey)) return
-        seenForDayBranch.add(dedupeKey)
-
+      const seen = new Set<string>()
+      rows.forEach(emp => {
+        const key = `${emp.employeeId}_${emp.branchName}_${scheduleDate}`
+        if (seen.has(key)) return
+        seen.add(key)
         const branchName = emp.branchName || "Unassigned"
-        if (!allocationMap.has(branchName)) {
-          allocationMap.set(branchName, { fullTime: 0, partTime: 0, total: 0, presentCount: 0 })
-        }
-
-        const branchData = allocationMap.get(branchName)!
-        const employeeRecord = crews.find((c: any) => String(c.id) === emp.employeeId)
-
-        if (employeeRecord) {
-          if (employeeRecord.type === "full-time") {
-            branchData.fullTime++
-          } else if (employeeRecord.type === "part-time") {
-            branchData.partTime++
-          }
-        }
-
-        branchData.total++
-        const realStatus = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
-        if (realStatus === "present") {
-          branchData.presentCount++
-        }
+        if (!map.has(branchName)) map.set(branchName, { fullTime: 0, partTime: 0, total: 0, present: 0 })
+        const d = map.get(branchName)!
+        const crew = employees.find((c: any) => String(c.id) === emp.employeeId)
+        if (crew?.type === "full-time") d.fullTime++
+        else if (crew?.type === "part-time") d.partTime++
+        d.total++
+        const status = attendanceLookup[`${emp.employeeId}_${scheduleDate}`]
+        if (status === "present" || status === "undertime") d.present++
       })
     })
 
-    // Convert map to array and calculate attendance rate
-    return Array.from(allocationMap.entries()).map(([branchName, data]) => {
-      const attendanceRate = data.total > 0 ? Math.round((data.presentCount / data.total) * 100) : 0
-      return {
-        branchName,
-        fullTime: data.fullTime,
-        partTime: data.partTime,
-        total: data.total,
-        attendanceRate,
-      }
-    })
-  }, [weekSchedules, weekAttendance, attendanceLookup, crews, branches])
+    return Array.from(map.entries()).map(([name, d]) => ({
+      branchName: name,
+      fullTime: d.fullTime,
+      partTime: d.partTime,
+      total: d.total,
+      attendanceRate: d.total > 0 ? Math.round((d.present / d.total) * 100) : 0,
+    }))
+  }, [weekSchedules, weekAttendance, attendanceLookup, employees, branches])
 
-  // Calculate branch distribution from Firestore schedules
-  const branchDistributionData = useMemo(() => {
-    const labels = crewAllocationByBranch.map((alloc: any) => alloc.branchName)
-    const data = crewAllocationByBranch.map((alloc: any) => alloc.total)
-
-    return {
-      labels,
-      datasets: [
-        {
-          label: "Branch Distribution",
-          data,
-          backgroundColor: [
-            "rgba(16, 185, 129, 0.7)", // green
-            "rgba(244, 63, 94, 0.7)", // rose
-            "rgba(6, 182, 212, 0.7)", // cyan
-            "rgba(139, 92, 246, 0.7)", // purple
-            "rgba(245, 158, 11, 0.7)", // amber
-            "rgba(132, 204, 22, 0.7)", // lime
-            "rgba(236, 72, 153, 0.7)", // pink
-          ],
-          borderColor: [
-            "rgba(16, 185, 129, 1)",
-            "rgba(244, 63, 94, 1)",
-            "rgba(6, 182, 212, 1)",
-            "rgba(139, 92, 246, 1)",
-            "rgba(245, 158, 11, 1)",
-            "rgba(132, 204, 22, 1)",
-            "rgba(236, 72, 153, 1)",
-          ],
-          borderWidth: 1,
-        },
-      ],
-    }
-  }, [crewAllocationByBranch])
-
-  // Generate attendance trend data
-  const attendanceTrendData = useMemo(() => {
+  // Attendance trend chart data
+  const trendChartData = useMemo(() => {
     if (timeRange === "day") {
-      // Daily view: show Monday to Sunday of the selected week
-      const labels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-      const presentData = []
-      const absentData = []
+      const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+      const present: number[] = []
+      const absent: number[] = []
+      const undertime: number[] = []
 
-      // Get attendance data for each day of the week
       for (let i = 0; i < 7; i++) {
-        const dateToCheck = new Date(weekStartDate)
-        dateToCheck.setDate(dateToCheck.getDate() + i)
-        const dateISO = getDateString(dateToCheck)
-        
-        // Find schedule for this day by scheduleFor
-        const daySchedule = weekSchedules.find((schedule: any) => {
-          const targetDate = schedule.scheduleFor || schedule.date
-          return targetDate === dateISO
-        })
-
-        if (daySchedule) {
-          // Count real attendance from daily_attendance table
-          let present = 0
-          let absent = 0
-          const employees = getScheduledEmployeesFromSchedule(daySchedule)
-          employees.forEach((emp: any) => {
-            const realStatus = attendanceLookup[`${emp.employeeId}_${dateISO}`]
-            if (realStatus === "present") {
-              present++
-            } else {
-              absent++
-            }
+        const d = new Date(weekStartDate)
+        d.setDate(d.getDate() + i)
+        const iso = getDateString(d)
+        const schedule = weekSchedules.find((s: any) => (s.scheduleFor || s.date) === iso)
+        if (schedule) {
+          let p = 0, a = 0, u = 0
+          getScheduledEmployeesFromSchedule(schedule).forEach((emp: any) => {
+            const s = attendanceLookup[`${emp.employeeId}_${iso}`]
+            if (s === "present") p++
+            else if (s === "undertime") u++
+            else a++
           })
-          presentData.push(present)
-          absentData.push(absent)
+          present.push(p); absent.push(a); undertime.push(u)
         } else {
-          // No schedule for this day
-          presentData.push(0)
-          absentData.push(0)
+          present.push(0); absent.push(0); undertime.push(0)
         }
       }
 
       return {
         labels,
         datasets: [
-          {
-            label: "Present",
-            data: presentData,
-            backgroundColor: "rgba(34, 197, 94, 0.5)",
-            borderColor: "rgba(34, 197, 94, 1)",
-            borderWidth: 1,
-          },
-          {
-            label: "Absent",
-            data: absentData,
-            backgroundColor: "rgba(239, 68, 68, 0.5)",
-            borderColor: "rgba(239, 68, 68, 1)",
-            borderWidth: 1,
-          },
+          { label: "Present", data: present, backgroundColor: "rgba(34, 197, 94, 0.6)", borderColor: "rgba(34, 197, 94, 1)", borderWidth: 1 },
+          { label: "Undertime", data: undertime, backgroundColor: "rgba(245, 158, 11, 0.6)", borderColor: "rgba(245, 158, 11, 1)", borderWidth: 1 },
+          { label: "Absent", data: absent, backgroundColor: "rgba(239, 68, 68, 0.6)", borderColor: "rgba(239, 68, 68, 1)", borderWidth: 1 },
         ],
       }
     }
 
-    // Weekly view: show 4 latest weeks (with or without attendance data)
     if (timeRange === "week") {
-      // Build a map of weeks with their attendance data
-      const weeksMap = new Map<string, { label: string; present: number; absent: number; date: Date }>()
+      const weeksMap = new Map<string, { label: string; present: number; absent: number; undertime: number; date: Date }>()
 
-      // Scan historical schedules to find weeks with attendance
       trendSchedules.forEach((schedule: any) => {
-        const schedDateStr = schedule?.scheduleFor || schedule?.date
-        if (!schedDateStr) return
-
-        const scheduleDate = new Date(schedDateStr + "T00:00:00")
-        const weekStart = getWeekStart(scheduleDate)
-        const weekLabel = `Week ${format(weekStart, "w")} (${format(weekStart, "MMM d")})`
-        const weekKey = weekLabel
-
-        if (!weeksMap.has(weekKey)) {
-          weeksMap.set(weekKey, { label: weekLabel, present: 0, absent: 0, date: weekStart })
-        }
-
-        const weekData = weeksMap.get(weekKey)!
-        const rows = getScheduledEmployeesFromSchedule(schedule)
-        rows.forEach((emp: any) => {
-          const realStatus = trendAttendanceLookup[`${emp.employeeId}_${schedDateStr}`]
-          if (realStatus === "present") {
-            weekData.present++
-          } else {
-            weekData.absent++
-          }
+        const dateStr = schedule?.scheduleFor || schedule?.date
+        if (!dateStr) return
+        const d = new Date(dateStr + "T00:00:00")
+        const ws = getMonday(d)
+        const label = `Week ${format(ws, "w")} (${format(ws, "MMM d")})`
+        if (!weeksMap.has(label)) weeksMap.set(label, { label, present: 0, absent: 0, undertime: 0, date: ws })
+        const wd = weeksMap.get(label)!
+        getScheduledEmployeesFromSchedule(schedule).forEach((emp: any) => {
+          const s = trendAttendanceLookup[`${emp.employeeId}_${dateStr}`]
+          if (s === "present") wd.present++
+          else if (s === "undertime") wd.undertime++
+          else wd.absent++
         })
       })
 
-      // Generate 4 latest weeks (whether they have data or not)
-      const fourLatestWeeks = []
-      for (let i = 3; i >= 0; i--) {
-        const weekStart = new Date()
-        weekStart.setDate(weekStart.getDate() - i * 7)
-        const weekStartDate = getWeekStart(weekStart)
-        const weekLabel = `Week ${format(weekStartDate, "w")} (${format(weekStartDate, "MMM d")})`
-        fourLatestWeeks.push({ label: weekLabel, date: weekStartDate })
-      }
-
-      // Map attendance data to the 4 latest weeks
-      const labels: string[] = []
-      const presentData: number[] = []
-      const absentData: number[] = []
-
-      fourLatestWeeks.forEach((week) => {
-        labels.push(week.label)
-        
-        // Find matching week in weeksMap
-        const matchingWeek = Array.from(weeksMap.values()).find(
-          (w) => w.date.toDateString() === week.date.toDateString()
-        )
-
-        if (matchingWeek) {
-          presentData.push(matchingWeek.present)
-          absentData.push(matchingWeek.absent)
-        } else {
-          // No data for this week
-          presentData.push(0)
-          absentData.push(0)
-        }
-      })
-
+      const sorted = Array.from(weeksMap.values()).sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-4)
       return {
-        labels,
+        labels: sorted.map(w => w.label),
         datasets: [
-          {
-            label: "Present",
-            data: presentData,
-            backgroundColor: "rgba(34, 197, 94, 0.5)",
-            borderColor: "rgba(34, 197, 94, 1)",
-            borderWidth: 1,
-          },
-          {
-            label: "Absent",
-            data: absentData,
-            backgroundColor: "rgba(239, 68, 68, 0.5)",
-            borderColor: "rgba(239, 68, 68, 1)",
-            borderWidth: 1,
-          },
+          { label: "Present", data: sorted.map(w => w.present), backgroundColor: "rgba(34, 197, 94, 0.6)", borderColor: "rgba(34, 197, 94, 1)", borderWidth: 1 },
+          { label: "Undertime", data: sorted.map(w => w.undertime), backgroundColor: "rgba(245, 158, 11, 0.6)", borderColor: "rgba(245, 158, 11, 1)", borderWidth: 1 },
+          { label: "Absent", data: sorted.map(w => w.absent), backgroundColor: "rgba(239, 68, 68, 0.6)", borderColor: "rgba(239, 68, 68, 1)", borderWidth: 1 },
         ],
       }
     }
 
-    // Monthly view: aggregate real data from schedules for all months (January to December)
-    const monthLabels = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-    const monthPresentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    const monthAbsentData: number[] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    // Monthly
+    const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    const mp = new Array(12).fill(0)
+    const ma = new Array(12).fill(0)
+    const mu = new Array(12).fill(0)
 
-    // Aggregate real attendance data from historical schedules grouped by month
     trendSchedules.forEach((schedule: any) => {
-      const schedDateStr = schedule?.scheduleFor || schedule?.date
-      if (!schedDateStr) return
-
-      const scheduleDate = new Date(schedDateStr + "T00:00:00")
-      const monthIndex = scheduleDate.getMonth() // 0-11
-      const rows = getScheduledEmployeesFromSchedule(schedule)
-
-      rows.forEach((emp: any) => {
-        const realStatus = trendAttendanceLookup[`${emp.employeeId}_${schedDateStr}`]
-        if (realStatus === "present") {
-          monthPresentData[monthIndex]++
-        } else {
-          monthAbsentData[monthIndex]++
-        }
+      const dateStr = schedule?.scheduleFor || schedule?.date
+      if (!dateStr) return
+      const month = new Date(dateStr + "T00:00:00").getMonth()
+      getScheduledEmployeesFromSchedule(schedule).forEach((emp: any) => {
+        const s = trendAttendanceLookup[`${emp.employeeId}_${dateStr}`]
+        if (s === "present") mp[month]++
+        else if (s === "undertime") mu[month]++
+        else ma[month]++
       })
     })
 
     return {
-      labels: monthLabels,
-      datasets: [
-        {
-          label: "Present",
-          data: monthPresentData,
-          backgroundColor: "rgba(34, 197, 94, 0.5)",
-          borderColor: "rgba(34, 197, 94, 1)",
-          borderWidth: 1,
-        },
-        {
-          label: "Absent",
-          data: monthAbsentData,
-          backgroundColor: "rgba(239, 68, 68, 0.5)",
-          borderColor: "rgba(239, 68, 68, 1)",
-          borderWidth: 1,
-        },
-      ],
-    }
-  }, [
-    crews.length,
-    timeRange,
-    weekSchedules,
-    weekStartDate,
-    attendanceLookup,
-    trendSchedules,
-    trendAttendanceLookup,
-  ])
-
-  // Generate restaurant deployment data
-  const restaurantDeploymentData = useMemo(() => {
-    // Use crew allocation computed from schedules
-    const labels = crewAllocationByBranch.map((c) => c.branchName)
-    const data = crewAllocationByBranch.map((c) => c.total)
-
-    return {
       labels,
       datasets: [
-        {
-          label: "Assigned Employees",
-          data,
-          backgroundColor: "rgba(139, 92, 246, 0.5)",
-          borderColor: "rgba(139, 92, 246, 1)",
-          borderWidth: 1,
-        },
+        { label: "Present", data: mp, backgroundColor: "rgba(34, 197, 94, 0.6)", borderColor: "rgba(34, 197, 94, 1)", borderWidth: 1 },
+        { label: "Undertime", data: mu, backgroundColor: "rgba(245, 158, 11, 0.6)", borderColor: "rgba(245, 158, 11, 1)", borderWidth: 1 },
+        { label: "Absent", data: ma, backgroundColor: "rgba(239, 68, 68, 0.6)", borderColor: "rgba(239, 68, 68, 1)", borderWidth: 1 },
       ],
     }
-  }, [crewAllocationByBranch])
-  
-  // Generate leave trend data
+  }, [timeRange, weekSchedules, weekStartDate, attendanceLookup, trendSchedules, trendAttendanceLookup])
+
+  // Leave summary
+  const leaveSummary = useMemo(() => {
+    let approved = 0, pending = 0, rejected = 0
+    leaveRequests.forEach((l: any) => {
+      if (l.status === "approved") approved++
+      else if (l.status === "pending") pending++
+      else if (l.status === "rejected") rejected++
+    })
+    return { approved, pending, rejected, total: approved + pending + rejected }
+  }, [leaveRequests])
+
+  // Leave trend chart
+  const [leavePeriod, setLeavePeriod] = useState<"monthly" | "weekly" | "annually">("monthly")
+
   const leaveTrendData = useMemo(() => {
-    const approvedLeaves = leaveRequests.filter((l: any) => l.status === "approved")
+    const approved = leaveRequests.filter((l: any) => l.status === "approved")
 
     if (leavePeriod === "monthly") {
-      const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-      const leaveCounts = new Array(12).fill(0)
-
-      approvedLeaves.forEach((leave: any) => {
-        const leaveDate = new Date(leave.startDate)
-        if (!isNaN(leaveDate.getTime())) leaveCounts[leaveDate.getMonth()]++
+      const counts = new Array(12).fill(0)
+      approved.forEach((l: any) => {
+        const d = new Date(l.startDate)
+        if (!isNaN(d.getTime())) counts[d.getMonth()]++
       })
-
       return {
-        labels: monthLabels,
-        datasets: [
-          {
-            label: "Approved Leaves",
-            data: leaveCounts,
-            backgroundColor: "rgba(59, 130, 246, 0.7)",
-            borderColor: "rgba(59, 130, 246, 1)",
-            borderWidth: 1,
-          },
-        ],
+        labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        datasets: [{ label: "Approved Leaves", data: counts, backgroundColor: "rgba(59, 130, 246, 0.7)", borderColor: "rgba(59, 130, 246, 1)", borderWidth: 1 }],
       }
-    } else if (leavePeriod === "weekly") {
-      const weekLabels = ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"]
-      const leaveCounts = new Array(5).fill(0)
+    }
 
-      approvedLeaves.forEach((leave: any) => {
-        const leaveDate = new Date(leave.startDate)
-        if (!isNaN(leaveDate.getTime())) {
-          const week = Math.floor((leaveDate.getDate() - 1) / 7) // 0-based
-          if (week >= 0 && week < 5) leaveCounts[week]++
+    if (leavePeriod === "weekly") {
+      const counts = new Array(5).fill(0)
+      approved.forEach((l: any) => {
+        const d = new Date(l.startDate)
+        if (!isNaN(d.getTime())) {
+          const week = Math.min(Math.floor((d.getDate() - 1) / 7), 4)
+          counts[week]++
         }
       })
-
       return {
-        labels: weekLabels,
-        datasets: [
-          {
-            label: "Approved Leaves",
-            data: leaveCounts,
-            backgroundColor: "rgba(34, 197, 94, 0.7)",
-            borderColor: "rgba(34, 197, 94, 1)",
-            borderWidth: 1,
-          },
-        ],
+        labels: ["Week 1", "Week 2", "Week 3", "Week 4", "Week 5"],
+        datasets: [{ label: "Approved Leaves", data: counts, backgroundColor: "rgba(34, 197, 94, 0.7)", borderColor: "rgba(34, 197, 94, 1)", borderWidth: 1 }],
       }
-    } else {
-      // Yearly summary for last 4 years
-      const currentYear = new Date().getFullYear()
-      const yearLabels = [currentYear - 3, currentYear - 2, currentYear - 1, currentYear].map(String)
-      const leaveCounts = new Array(4).fill(0)
+    }
 
-      approvedLeaves.forEach((leave: any) => {
-        const leaveDate = new Date(leave.startDate)
-        if (!isNaN(leaveDate.getTime())) {
-          const idx = leaveDate.getFullYear() - (currentYear - 3)
-          if (idx >= 0 && idx < 4) leaveCounts[idx]++
-        }
-      })
-
-      return {
-        labels: yearLabels,
-        datasets: [
-          {
-            label: "Approved Leaves",
-            data: leaveCounts,
-            backgroundColor: "rgba(168, 85, 247, 0.7)",
-            borderColor: "rgba(168, 85, 247, 1)",
-            borderWidth: 1,
-          },
-        ],
+    const year = new Date().getFullYear()
+    const labels = [year - 3, year - 2, year - 1, year].map(String)
+    const counts = new Array(4).fill(0)
+    approved.forEach((l: any) => {
+      const d = new Date(l.startDate)
+      if (!isNaN(d.getTime())) {
+        const idx = d.getFullYear() - (year - 3)
+        if (idx >= 0 && idx < 4) counts[idx]++
       }
+    })
+    return {
+      labels,
+      datasets: [{ label: "Approved Leaves", data: counts, backgroundColor: "rgba(168, 85, 247, 0.7)", borderColor: "rgba(168, 85, 247, 1)", borderWidth: 1 }],
     }
   }, [leaveRequests, leavePeriod])
 
-  // Generate leave summary statistics
-  const leaveSummary = useMemo(() => {
-    let totalApproved = 0
-    let totalPending = 0
-    let totalRejected = 0
+  // Leave table data
+  const [leaveFilter, setLeaveFilter] = useState<"all" | "approved" | "pending" | "rejected">("all")
+  const [leaveSearch, setLeaveSearch] = useState("")
+  const [leavePage, setLeavePage] = useState(1)
 
-    leaveRequests.forEach((leave: any) => {
-      if (leave.status === "approved") totalApproved++
-      else if (leave.status === "pending") totalPending++
-      else if (leave.status === "rejected") totalRejected++
-    })
+  const filteredLeaves = useMemo(() => {
+    let list = leaveRequests
+    if (leaveFilter !== "all") list = list.filter((l: any) => l.status === leaveFilter)
+    if (leaveSearch) {
+      const q = leaveSearch.toLowerCase()
+      list = list.filter((l: any) => {
+        const emp = employees.find((e: any) => String(e.id) === String(l.employeeId))
+        return (l.employeeName || "").toLowerCase().includes(q) || (l.reason || "").toLowerCase().includes(q) || (emp?.employeeCode || "").toLowerCase().includes(q)
+      })
+    }
+    return list.sort((a: any, b: any) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())
+  }, [leaveRequests, leaveFilter, leaveSearch])
 
-    return { totalApproved, totalPending, totalRejected }
-  }, [leaveRequests])
+  const leaveTotalPages = Math.max(1, Math.ceil(filteredLeaves.length / ITEMS_PER_PAGE))
+  const leavePageSafe = Math.min(leavePage, leaveTotalPages)
+  const paginatedLeaves = filteredLeaves.slice((leavePageSafe - 1) * ITEMS_PER_PAGE, leavePageSafe * ITEMS_PER_PAGE)
 
-  // Quick week selection buttons
-  const handleQuickWeekSelect = (weeks: number) => {
-    const newDate = new Date()
-    newDate.setDate(newDate.getDate() - weeks * 7)
-    setWeekStartDate(getWeekStart(newDate))
+  // Week navigation
+  const prevWeek = () => {
+    const d = new Date(weekStartDate)
+    d.setDate(d.getDate() - 7)
+    setWeekStartDate(d)
+    setCurrentPage(1)
+  }
+  const nextWeek = () => {
+    const d = new Date(weekStartDate)
+    d.setDate(d.getDate() + 7)
+    setWeekStartDate(d)
+    setCurrentPage(1)
+  }
+  const goToCurrentWeek = () => {
+    setWeekStartDate(getMonday(new Date()))
+    setCurrentPage(1)
   }
 
-  // Check if the selected week contains today
+  const weekEnd = new Date(weekStartDate)
+  weekEnd.setDate(weekEnd.getDate() + 6)
   const isCurrentWeek = (() => {
     const today = new Date()
-    const weekEnd = new Date(weekStartDate)
-    weekEnd.setDate(weekEnd.getDate() + 6)
     return today >= weekStartDate && today <= weekEnd
   })()
 
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-64 bg-muted animate-pulse rounded-lg" />
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-28 bg-muted animate-pulse rounded-xl" />)}
+        </div>
+        <div className="h-96 bg-muted animate-pulse rounded-xl" />
+      </div>
+    )
+  }
+
+  const PaginationControls = ({ current, total, setCurrent, count, perPage }: { current: number; total: number; setCurrent: (p: number) => void; count: number; perPage: number }) => {
+    if (total <= 1) return null
+    return (
+      <div className="flex items-center justify-between border-t px-4 py-3">
+        <p className="text-sm text-muted-foreground">
+          Showing {(current - 1) * perPage + 1}&ndash;{Math.min(current * perPage, count)} of {count}
+        </p>
+        <div className="flex items-center gap-1">
+          <Button variant="outline" size="sm" className="h-8" disabled={current <= 1} onClick={() => setCurrent(current - 1)}>Previous</Button>
+          {Array.from({ length: total }, (_, i) => i + 1)
+            .filter(p => p === 1 || p === total || Math.abs(p - current) <= 1)
+            .reduce<(number | string)[]>((acc, p, i, arr) => {
+              if (i > 0 && p - (arr[i - 1] as number) > 1) acc.push("...")
+              acc.push(p)
+              return acc
+            }, [])
+            .map((p, i) =>
+              typeof p === "string" ? (
+                <span key={`e-${i}`} className="px-1 text-muted-foreground">&hellip;</span>
+              ) : (
+                <Button key={p} variant={p === current ? "default" : "outline"} size="sm" className="h-8 w-8 p-0" onClick={() => setCurrent(p)}>{p}</Button>
+              )
+            )}
+          <Button variant="outline" size="sm" className="h-8" disabled={current >= total} onClick={() => setCurrent(current + 1)}>Next</Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Reports Dashboard</h1>
-        <p className="text-muted-foreground">View crew distribution and attendance metrics</p>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Reports</h1>
+          <p className="text-muted-foreground text-sm">Attendance analytics, branch overview, and leave tracking</p>
+        </div>
+        {/* Week Navigation */}
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon" className="h-9 w-9" onClick={prevWeek}>
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          <div className="text-center min-w-[180px]">
+            <div className="text-sm font-medium">
+              {format(weekStartDate, "MMM d")} &ndash; {format(weekEnd, "MMM d, yyyy")}
+            </div>
+            {isCurrentWeek && <Badge className="text-[10px] h-4 bg-blue-500">Current Week</Badge>}
+          </div>
+          <Button variant="outline" size="icon" className="h-9 w-9" onClick={nextWeek}>
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          {!isCurrentWeek && (
+            <Button variant="ghost" size="sm" className="text-xs" onClick={goToCurrentWeek}>Today</Button>
+          )}
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <Card className="border-l-4 border-l-green-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-green-100 dark:bg-green-950 flex items-center justify-center flex-shrink-0">
+              <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.present}</div>
+              <div className="text-xs text-muted-foreground">Present</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-amber-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-amber-100 dark:bg-amber-950 flex items-center justify-center flex-shrink-0">
+              <Clock className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.undertime}</div>
+              <div className="text-xs text-muted-foreground">Undertime</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-red-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-red-100 dark:bg-red-950 flex items-center justify-center flex-shrink-0">
+              <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.absent}</div>
+              <div className="text-xs text-muted-foreground">Absent</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-blue-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-blue-100 dark:bg-blue-950 flex items-center justify-center flex-shrink-0">
+              <Users className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.total}</div>
+              <div className="text-xs text-muted-foreground">Total Scheduled</div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-l-4 border-l-violet-500">
+          <CardContent className="p-4 flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-violet-100 dark:bg-violet-950 flex items-center justify-center flex-shrink-0">
+              <TrendingUp className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+            </div>
+            <div>
+              <div className="text-xl font-bold">{summary.rate}%</div>
+              <div className="text-xs text-muted-foreground">Attendance Rate</div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="attendance">Attendance Report</TabsTrigger>
-          <TabsTrigger value="allocation">Crew Allocation Summary</TabsTrigger>
-          <TabsTrigger value="deployment">Restaurant Deployment</TabsTrigger>
-          <TabsTrigger value="leaves">Leave Reports</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="attendance" className="gap-1.5"><BarChart3 className="h-4 w-4 hidden sm:block" /> Attendance</TabsTrigger>
+          <TabsTrigger value="branches" className="gap-1.5"><Building className="h-4 w-4 hidden sm:block" /> Branches</TabsTrigger>
+          <TabsTrigger value="leaves" className="gap-1.5"><FileText className="h-4 w-4 hidden sm:block" /> Leaves</TabsTrigger>
         </TabsList>
 
-        {/* Attendance Report Tab */}
-        <TabsContent value="attendance" className="space-y-6 mt-6">
-          {/* Attendance Trend Chart */}
+        {/* ─── ATTENDANCE TAB ─── */}
+        <TabsContent value="attendance" className="space-y-6 mt-4">
+          {/* Trend Chart */}
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-lg">Attendance Trend</CardTitle>
-              <Select value={timeRange} onValueChange={(value: "day" | "week" | "month") => setTimeRange(value)}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="Select time range" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="day">Daily</SelectItem>
-                  <SelectItem value="week">Weekly</SelectItem>
-                  <SelectItem value="month">Monthly</SelectItem>
-                </SelectContent>
-              </Select>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Attendance Trend</CardTitle>
+                <Select value={timeRange} onValueChange={(v: "day" | "week" | "month") => setTimeRange(v)}>
+                  <SelectTrigger className="w-[130px] h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="day">Daily</SelectItem>
+                    <SelectItem value="week">Weekly</SelectItem>
+                    <SelectItem value="month">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <ChartContainer className="h-[300px]">
+              <ChartContainer className="h-[260px]">
                 <Chart
                   type="bar"
-                  data={attendanceTrendData}
+                  data={trendChartData}
                   options={{
                     responsive: true,
-                    scales: {
-                      x: {
-                        stacked: true,
-                      },
-                      y: {
-                        stacked: true,
-                        beginAtZero: true,
-                      },
-                    },
-                    plugins: {
-                      legend: {
-                        position: "top" as const,
-                      },
-                    },
+                    scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } },
+                    plugins: { legend: { position: "top" as const } },
                   }}
                 />
               </ChartContainer>
             </CardContent>
           </Card>
 
-          {/* Overall attendance summary for selected week */}
-          <div className="bg-muted/30 rounded-lg p-4">
-            <h3 className="text-lg font-medium mb-2 flex items-center">
-              Attendance Summary for Week of {format(weekStartDate, "MMMM d, yyyy")}
-              {isCurrentWeek && <Badge className="ml-2 bg-blue-500 text-white">Current Week</Badge>}
-            </h3>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300">
-                  {overallAttendance.presentCount} Present
-                </Badge>
-                <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300">
-                  {overallAttendance.absentCount} Absent
-                </Badge>
+          {/* Attendance Table */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle className="text-base">Employee Attendance Logs</CardTitle>
+                <Select value={attendanceFilter} onValueChange={(v: any) => { setAttendanceFilter(v); setCurrentPage(1) }}>
+                  <SelectTrigger className="w-[160px] h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="present">Present</SelectItem>
+                    <SelectItem value="absent">Absent</SelectItem>
+                    <SelectItem value="undertime">Undertime</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Attendance Rate:</span>
-                <span className="font-medium">{overallAttendance.rate}%</span>
+              <div className="relative mt-2 max-w-sm">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input placeholder="Search name or branch..." className="pl-9 h-8 text-sm" value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1) }} />
               </div>
-
-              <div className="flex-1 hidden sm:block">
-                <div className="w-full bg-muted rounded-full h-2">
-                  <div className="bg-green-500 h-2 rounded-full" style={{ width: `${overallAttendance.rate}%` }}></div>
-                </div>
-              </div>
-            </div>
-
-            {isCurrentWeek && (
-              <div className="mt-2 text-sm text-blue-600 dark:text-blue-400">
-                Note: This week's attendance reflects the current status from the dashboard.
-              </div>
-            )}
-          </div>
-
-          {/* Unified attendance logs (not grouped by branch) */}
-          <div className="border rounded-lg overflow-hidden">
-            <div className="bg-muted/50 p-3">
-              <h3 className="font-medium">Employee Attendance Logs</h3>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-muted/50 border-b">
-                  <tr>
-                    <th className="text-left px-4 py-2 font-medium text-sm">Name</th>
-                    <th className="text-left px-4 py-2 font-medium text-sm">Days Present</th>
-                    <th className="text-left px-4 py-2 font-medium text-sm">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {attendanceHistory.length > 0 ? (
-                    attendanceHistory.map((employee: any) => (
-                      <tr
-                        key={employee.id}
-                        className={employee.wasPresent ? "bg-green-50 dark:bg-green-950/20" : "bg-red-50 dark:bg-red-950/20"}
-                      >
-                        <td className="px-4 py-3">
-                          <div className="font-medium">{employee.displayName || `${employee.firstName || ""} ${employee.surname || ""}`.trim()}</div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">
-                          {employee.presentDays || 0}/{employee.totalDays || 7}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={employee.wasPresent ? "default" : "destructive"}>
-                            {employee.wasPresent ? "Present" : "Absent"}
-                          </Badge>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={3} className="px-4 py-6 text-center text-sm text-muted-foreground">
-                        No scheduled attendance data for this week.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </TabsContent>
-
-        {/* Crew Allocation Summary Tab */}
-        <TabsContent value="allocation" className="space-y-6 mt-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Users className="h-5 w-5 mr-2" />
-                  Crew Distribution
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {crews.length > 0 ? (
-                  <ChartContainer className="h-[300px]">
-                    <Chart type="pie" data={crewDistributionData} options={chartOptions} className="max-w-full" />
-                  </ChartContainer>
-                ) : (
-                  <div className="flex items-center justify-center h-64 text-muted-foreground">No data available</div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <MapPin className="h-5 w-5 mr-2" />
-                  Branch Distribution
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {crewAllocationByBranch.length > 0 && crewAllocationByBranch.some((alloc: any) => alloc.total > 0) ? (
-                  <ChartContainer className="h-[300px]">
-                    <Chart type="pie" data={branchDistributionData} options={chartOptions} className="max-w-full" />
-                  </ChartContainer>
-                ) : (
-                  <div className="flex items-center justify-center h-64 text-muted-foreground">
-                    No branches available
+            </CardHeader>
+            <CardContent className="p-0">
+              {paginatedAttendance.length > 0 ? (
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[40px]">#</TableHead>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Employee ID</TableHead>
+                          <TableHead>Branch</TableHead>
+                          <TableHead className="text-center">Days Present</TableHead>
+                          <TableHead className="text-center">Total Days</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedAttendance.map((emp, i) => (
+                          <TableRow key={emp.id}>
+                            <TableCell className="text-muted-foreground">{(safePage - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
+                            <TableCell className="font-medium">{emp.displayName}</TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{emp.employeeCode || "—"}</TableCell>
+                            <TableCell className="text-muted-foreground">{emp.branchName}</TableCell>
+                            <TableCell className="text-center">
+                              {emp.presentDays}
+                              {emp.undertimeDays > 0 && <span className="text-amber-600 text-xs ml-1">({emp.undertimeDays} UT)</span>}
+                            </TableCell>
+                            <TableCell className="text-center">{emp.totalDays}</TableCell>
+                            <TableCell>
+                              {emp.hasUndertime ? (
+                                <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400 dark:border-amber-800" variant="outline">Undertime</Badge>
+                              ) : (
+                                <Badge variant={emp.wasPresent ? "default" : "destructive"}>{emp.wasPresent ? "Present" : "Absent"}</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
+                  <PaginationControls current={safePage} total={totalPages} setCurrent={setCurrentPage} count={filteredAttendance.length} perPage={ITEMS_PER_PAGE} />
+                </>
+              ) : (
+                <div className="py-12 text-center">
+                  <Calendar className="h-10 w-10 text-muted-foreground/50 mx-auto mb-3" />
+                  <p className="text-muted-foreground">No attendance data for this week</p>
+                  {(searchQuery || attendanceFilter !== "all") && (
+                    <Button variant="outline" size="sm" className="mt-3" onClick={() => { setSearchQuery(""); setAttendanceFilter("all"); setCurrentPage(1) }}>Clear Filters</Button>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ─── BRANCHES TAB ─── */}
+        <TabsContent value="branches" className="space-y-6 mt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Crew type distribution */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2"><Users className="h-4 w-4" /> Crew Distribution</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {employees.length > 0 ? (
+                  <ChartContainer className="h-[260px]">
+                    <Chart
+                      type="pie"
+                      data={{
+                        labels: ["Full-Time", "Part-Time"],
+                        datasets: [{
+                          data: [
+                            employees.filter(e => e.type === "full-time").length,
+                            employees.filter(e => e.type === "part-time").length,
+                          ],
+                          backgroundColor: ["rgba(14, 165, 233, 0.7)", "rgba(139, 92, 246, 0.7)"],
+                          borderColor: ["rgba(14, 165, 233, 1)", "rgba(139, 92, 246, 1)"],
+                          borderWidth: 1,
+                        }],
+                      }}
+                      options={{ responsive: true, plugins: { legend: { position: "bottom" as const } } }}
+                    />
+                  </ChartContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-muted-foreground">No data</div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Branch deployment chart */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2"><Building className="h-4 w-4" /> Branch Deployment</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {branchAllocation.some(a => a.total > 0) ? (
+                  <ChartContainer className="h-[260px]">
+                    <Chart
+                      type="bar"
+                      data={{
+                        labels: branchAllocation.map(a => a.branchName),
+                        datasets: [{ label: "Assigned Employees", data: branchAllocation.map(a => a.total), backgroundColor: "rgba(139, 92, 246, 0.6)", borderColor: "rgba(139, 92, 246, 1)", borderWidth: 1 }],
+                      }}
+                      options={{ responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: "top" as const } } }}
+                    />
+                  </ChartContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-64 text-muted-foreground">No deployment data</div>
                 )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Crew Allocation Table */}
+          {/* Branch Allocation Table */}
           <Card>
-            <CardHeader>
-              <CardTitle>Crew Allocation by Branch</CardTitle>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Crew Allocation by Branch</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="rounded-md border overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-muted/50">
-                    <tr>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Branch
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Full-Time
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Part-Time
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Total
-                      </th>
-                      <th
-                        scope="col"
-                        className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Attendance Rate
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-card divide-y divide-gray-200">
-                    {crewAllocationByBranch.map((allocation: any) => {
-                      return (
-                        <tr key={allocation.branchName}>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">{allocation.branchName}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.fullTime}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.partTime}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">{allocation.total}</td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <div className="flex items-center">
-                              <span className="mr-2">{allocation.attendanceRate}%</span>
-                              <div className="w-24 bg-muted rounded-full h-2">
-                                <div
-                                  className={`h-2 rounded-full ${
-                                    allocation.attendanceRate >= 75
-                                      ? "bg-green-500"
-                                      : allocation.attendanceRate >= 50
-                                        ? "bg-amber-500"
-                                        : "bg-red-500"
-                                  }`}
-                                  style={{ width: `${allocation.attendanceRate}%` }}
-                                ></div>
-                              </div>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Branch</TableHead>
+                      <TableHead className="text-center">Full-Time</TableHead>
+                      <TableHead className="text-center">Part-Time</TableHead>
+                      <TableHead className="text-center">Total</TableHead>
+                      <TableHead>Attendance Rate</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {branchAllocation.length > 0 ? branchAllocation.map(a => (
+                      <TableRow key={a.branchName}>
+                        <TableCell className="font-medium">{a.branchName}</TableCell>
+                        <TableCell className="text-center">{a.fullTime}</TableCell>
+                        <TableCell className="text-center">{a.partTime}</TableCell>
+                        <TableCell className="text-center">{a.total}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm w-10">{a.attendanceRate}%</span>
+                            <div className="flex-1 bg-muted rounded-full h-2 max-w-[120px]">
+                              <div className={`h-2 rounded-full ${a.attendanceRate >= 75 ? "bg-green-500" : a.attendanceRate >= 50 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${a.attendanceRate}%` }} />
                             </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No branch allocation data</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Restaurant Deployment Tab */}
-        <TabsContent value="deployment" className="space-y-6 mt-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Restaurant Deployment Record</h2>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between w-full">
-                <div className="flex items-center gap-2">
-                  <BarChart2 className="h-5 w-5 mr-2" />
-                  Branch Deployment Overview
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  Total Scheduled: {crewAllocationByBranch.reduce((s, a) => s + a.total, 0)}
-                </div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ChartContainer className="h-[400px]">
-                <Chart
-                  type="bar"
-                  data={restaurantDeploymentData}
-                  options={{
-                    responsive: true,
-                    scales: {
-                      y: {
-                        beginAtZero: true,
-                      },
-                    },
-                    plugins: {
-                      legend: {
-                        position: "top" as const,
-                      },
-                    },
-                  }}
-                />
-              </ChartContainer>
-            </CardContent>
-          </Card>
-
-          {/* Detailed per-branch deployment removed — showing overview across all branches */}
-        </TabsContent>
-
-        {/* Leave Reports Tab */}
-        <TabsContent value="leaves" className="space-y-6 mt-6">
-          <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-            <h2 className="text-xl font-semibold">Leave Trend Analysis</h2>
-            <Select
-              value={leavePeriod}
-              onValueChange={(value: "weekly" | "monthly" | "annually") => setLeavePeriod(value)}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select period" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
-                <SelectItem value="annually">Annually</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Leave Summary Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Approved Leaves</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-green-600">{leaveSummary.totalApproved}</div>
-                <p className="text-xs text-muted-foreground mt-1">Total approved this period</p>
+        {/* ─── LEAVES TAB ─── */}
+        <TabsContent value="leaves" className="space-y-6 mt-4">
+          {/* Leave Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card className="border-l-4 border-l-green-500">
+              <CardContent className="p-4">
+                <div className="text-2xl font-bold text-green-600">{leaveSummary.approved}</div>
+                <p className="text-xs text-muted-foreground">Approved</p>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Pending Requests</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-amber-600">{leaveSummary.totalPending}</div>
-                <p className="text-xs text-muted-foreground mt-1">Awaiting approval</p>
+            <Card className="border-l-4 border-l-amber-500">
+              <CardContent className="p-4">
+                <div className="text-2xl font-bold text-amber-600">{leaveSummary.pending}</div>
+                <p className="text-xs text-muted-foreground">Pending</p>
               </CardContent>
             </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Rejected</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-red-600">{leaveSummary.totalRejected}</div>
-                <p className="text-xs text-muted-foreground mt-1">Declined requests</p>
+            <Card className="border-l-4 border-l-red-500">
+              <CardContent className="p-4">
+                <div className="text-2xl font-bold text-red-600">{leaveSummary.rejected}</div>
+                <p className="text-xs text-muted-foreground">Rejected</p>
               </CardContent>
             </Card>
           </div>
 
           {/* Leave Trend Chart */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center">
-                <Calendar className="h-5 w-5 mr-2" />
-                Leave Trend Chart
-              </CardTitle>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Leave Trend</CardTitle>
+                <Select value={leavePeriod} onValueChange={(v: "weekly" | "monthly" | "annually") => setLeavePeriod(v)}>
+                  <SelectTrigger className="w-[130px] h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="annually">Annually</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <ChartContainer className="h-[350px]">
+              <ChartContainer className="h-[260px]">
                 <Chart
                   type="bar"
                   data={leaveTrendData}
-                  options={{
-                    responsive: true,
-                    scales: {
-                      y: {
-                        beginAtZero: true,
-                      },
-                    },
-                    plugins: {
-                      legend: {
-                        position: "top" as const,
-                      },
-                      tooltip: {
-                        callbacks: {
-                          label: (context: any) => {
-                            return `${context.dataset.label}: ${context.parsed.y} leaves`
-                          },
-                        },
-                      },
-                    },
-                  }}
+                  options={{ responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: "top" as const } } }}
                 />
               </ChartContainer>
             </CardContent>
           </Card>
 
-          {/* Leave Distribution Info */}
+          {/* Leave Requests Table */}
           <Card>
-            <CardHeader>
-              <CardTitle>Leave Distribution Overview</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-950/20 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Badge className="bg-green-600">✓</Badge>
-                    <span className="font-medium">Approved Leaves</span>
-                  </div>
-                  <span className="text-2xl font-bold text-green-600">{leaveSummary.totalApproved}</span>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-amber-50 dark:bg-amber-950/20 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Badge className="bg-amber-600">!</Badge>
-                    <span className="font-medium">Pending Requests</span>
-                  </div>
-                  <span className="text-2xl font-bold text-amber-600">{leaveSummary.totalPending}</span>
-                </div>
-
-                <div className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/20 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <Badge className="bg-red-600">✕</Badge>
-                    <span className="font-medium">Rejected Leaves</span>
-                  </div>
-                  <span className="text-2xl font-bold text-red-600">{leaveSummary.totalRejected}</span>
-                </div>
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <CardTitle className="text-base">Leave Requests</CardTitle>
+                <Select value={leaveFilter} onValueChange={(v: any) => { setLeaveFilter(v); setLeavePage(1) }}>
+                  <SelectTrigger className="w-[160px] h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+              <div className="relative mt-2 max-w-sm">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input placeholder="Search by name or reason..." className="pl-9 h-8 text-sm" value={leaveSearch}
+                  onChange={(e) => { setLeaveSearch(e.target.value); setLeavePage(1) }} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {paginatedLeaves.length > 0 ? (
+                <>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[40px]">#</TableHead>
+                          <TableHead>Employee</TableHead>
+                          <TableHead>Employee ID</TableHead>
+                          <TableHead>Date Range</TableHead>
+                          <TableHead>Reason</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {paginatedLeaves.map((leave: any, i: number) => {
+                          const leaveEmp = employees.find((e: any) => String(e.id) === String(leave.employeeId))
+                          return (
+                          <TableRow key={leave.id || i}>
+                            <TableCell className="text-muted-foreground">{(leavePageSafe - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
+                            <TableCell className="font-medium">{leave.employeeName || "Unknown"}</TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{leaveEmp?.employeeCode || "—"}</TableCell>
+                            <TableCell className="text-muted-foreground text-sm">
+                              {leave.startDate}{leave.endDate && leave.endDate !== leave.startDate ? ` \u2192 ${leave.endDate}` : ""}
+                            </TableCell>
+                            <TableCell className="text-sm">{leave.reason || "\u2014"}</TableCell>
+                            <TableCell>
+                              <Badge variant={leave.status === "approved" ? "default" : leave.status === "rejected" ? "destructive" : "outline"}
+                                className={leave.status === "pending" ? "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-950 dark:text-amber-400" : ""}>
+                                {leave.status}
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        )})}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <PaginationControls current={leavePageSafe} total={leaveTotalPages} setCurrent={setLeavePage} count={filteredLeaves.length} perPage={ITEMS_PER_PAGE} />
+                </>
+              ) : (
+                <div className="py-12 text-center">
+                  <FileText className="h-10 w-10 text-muted-foreground/50 mx-auto mb-3" />
+                  <p className="text-muted-foreground">No leave requests found</p>
+                  {(leaveSearch || leaveFilter !== "all") && (
+                    <Button variant="outline" size="sm" className="mt-3" onClick={() => { setLeaveSearch(""); setLeaveFilter("all"); setLeavePage(1) }}>Clear Filters</Button>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

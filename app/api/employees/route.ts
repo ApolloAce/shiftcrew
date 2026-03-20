@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { query, execute, mysqlNow } from "@/lib/mysql";
+import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,8 +77,14 @@ export async function POST(req: Request) {
 export async function PUT(req: Request) {
   try {
     const body = await req.json();
-    const { id, ...updates } = body;
+    const { id, password, ...updates } = body;
     if (!id) return NextResponse.json({ message: "Missing id" }, { status: 400 });
+
+    // If password is provided, hash it and add to updates
+    if (password && typeof password === "string" && password.trim()) {
+      const passwordHash = await bcrypt.hash(password.trim(), 10);
+      updates.passwordHash = passwordHash;
+    }
 
     // Accept only known updatable columns to prevent invalid/system fields from breaking updates.
     const allowedFields = new Set([
@@ -98,6 +105,8 @@ export async function PUT(req: Request) {
       "status",
       "branchId",
       "hireDate",
+      "employeeCode",
+      "passwordHash",
     ]);
 
     const sanitizedUpdates: Record<string, any> = {};
@@ -168,6 +177,7 @@ function mapUser(row: any) {
     address: row.address,
     emergencyContact: row.emergencyContact,
     position: row.position,
+    employeeCode: row.employeeCode,
     type: row.type,
     availability: typeof row.availability === "string" ? JSON.parse(row.availability) : row.availability || [],
     isPresent: !!row.isPresent,

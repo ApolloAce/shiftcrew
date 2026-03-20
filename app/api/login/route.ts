@@ -42,6 +42,7 @@ export async function POST(req: Request) {
       isEmployee: !!userDoc.isEmployee,
       branchId: userDoc.branchId || null,
       status: userDoc.status || "approved",
+      employeeCode: userDoc.employeeCode || null,
     };
 
     return NextResponse.json({ user: userData }, { status: 200 });

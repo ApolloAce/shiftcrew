@@ -6,7 +6,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useNotification } from "@/components/notification-provider"
-import { User, MapPin, Phone, Mail, Shield, Calendar } from "lucide-react"
+import { User, MapPin, Phone, Mail, Shield, Calendar, Hash } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -238,6 +238,13 @@ export default function EmployeeProfilePage() {
               <h2 className="text-xl font-bold">
                 {employeeData.firstName} {employeeData.surname}
               </h2>
+
+              {employeeData.employeeCode && (
+                <div className="flex items-center gap-1.5 mt-1">
+                  <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-sm font-mono text-muted-foreground">{employeeData.employeeCode}</span>
+                </div>
+              )}
 
               <p className="text-muted-foreground capitalize">{employeeData.type || "Full-time"} Employee</p>
 

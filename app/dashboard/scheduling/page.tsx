@@ -228,6 +228,7 @@ export default function SchedulingPage() {
     const idx = d === 0 ? 6 : d - 1 // Mon=0 .. Sun=6
     return new Set([idx])
   })
+  const [showWeekSchedule, setShowWeekSchedule] = useState(false)
   const [weekSchedules, setWeekSchedules] = useState<Record<string, any>>({})
   const [weekAttendance, setWeekAttendance] = useState<Record<string, Record<string, string>>>({})
 
@@ -1235,7 +1236,11 @@ export default function SchedulingPage() {
   const todayISO = formatDateLocal(new Date())
 
   // Quick stats derived from state
-  const assignedCount = useMemo(() => Object.keys(currentAssignments).length, [currentAssignments])
+  const assignedCount = useMemo(() => {
+    if (!fireEmployees || fireEmployees.length === 0) return Object.keys(currentAssignments).length
+    const activeIds = new Set(fireEmployees.map((e: any) => String(e.id)))
+    return Object.keys(currentAssignments).filter(id => activeIds.has(id)).length
+  }, [currentAssignments, fireEmployees])
   const manualCount = useMemo(() => Object.values(currentAssignments).filter(a => a.isManual).length, [currentAssignments])
   const totalEmployees = useMemo(() => (fireEmployees?.length || crews.length), [fireEmployees, crews])
 
@@ -1258,8 +1263,9 @@ export default function SchedulingPage() {
       return true
     }).filter(emp => {
       if (!searchQuery) return true
+      const q = searchQuery.toLowerCase()
       const name = `${emp.firstName} ${emp.surname}`.toLowerCase()
-      return name.includes(searchQuery.toLowerCase())
+      return name.includes(q) || ((emp as any).employeeCode || "").toLowerCase().includes(q)
     })
   }, [fireEmployees, currentAssignments, searchQuery, onLeaveMap])
 
@@ -1279,8 +1285,9 @@ export default function SchedulingPage() {
       return false
     }).filter(emp => {
       if (!searchQuery) return true
+      const q = searchQuery.toLowerCase()
       const name = `${emp.firstName} ${emp.surname}`.toLowerCase()
-      return name.includes(searchQuery.toLowerCase())
+      return name.includes(q) || ((emp as any).employeeCode || "").toLowerCase().includes(q)
     })
   }, [fireEmployees, fireBranches, currentAssignments, searchQuery, onLeaveMap])
 
@@ -1557,23 +1564,34 @@ export default function SchedulingPage() {
         </div>
       )}
 
-      {/* Search bar with clear button */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search crew members..."
-          className="pl-10 pr-8"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery("")}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
+      {/* Search bar with clear button + Week Schedule toggle */}
+      <div className="flex items-center gap-3">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search crew members..."
+            className="pl-10 pr-8"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        <Button
+          variant={showWeekSchedule ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowWeekSchedule(!showWeekSchedule)}
+          className="flex items-center gap-1.5 whitespace-nowrap"
+        >
+          <Calendar className="h-4 w-4" />
+          Week Schedule
+        </Button>
       </div>
 
       {/* Saving overlay */}
@@ -1692,7 +1710,15 @@ export default function SchedulingPage() {
                             ON LEAVE until {leaveEnd}
                           </Badge>
                         )}
+                        {!isOnLeave && (() => {
+                          const att = weekAttendance[todayISO]?.[String(emp.id)]
+                          if (att === "present") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Present</Badge>
+                          if (att === "undertime") return <Badge className="text-[9px] px-1.5 py-0 bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400 border-cyan-300 whitespace-nowrap flex-shrink-0" variant="outline">Undertime</Badge>
+                          if (att === "absent") return <Badge className="text-[9px] px-1.5 py-0 bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 border-red-300 whitespace-nowrap flex-shrink-0" variant="outline">Absent</Badge>
+                          return <Badge className="text-[9px] px-1.5 py-0 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 border-amber-300 whitespace-nowrap flex-shrink-0" variant="outline">Not Clocked In</Badge>
+                        })()}
                       </div>
+                      {(emp as any).employeeCode && <div className="text-[10px] font-mono text-muted-foreground">{(emp as any).employeeCode}</div>}
                       {emp.email && <div className="text-[10px] text-muted-foreground truncate">{emp.email}</div>}
                     </div>
                   </div>
@@ -1780,7 +1806,17 @@ export default function SchedulingPage() {
                         <div className="flex items-center gap-2">
                           <GripVertical className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm truncate">{emp.firstName} {emp.surname}</div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-medium text-sm truncate">{emp.firstName} {emp.surname}</span>
+                              {(() => {
+                                const att = weekAttendance[todayISO]?.[String(emp.id)]
+                                if (att === "present") return <Badge className="text-[9px] px-1.5 py-0 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 border-green-300 whitespace-nowrap flex-shrink-0" variant="outline">Present</Badge>
+                                if (att === "undertime") return <Badge className="text-[9px] px-1.5 py-0 bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400 border-cyan-300 whitespace-nowrap flex-shrink-0" variant="outline">Undertime</Badge>
+                                if (att === "absent") return <Badge className="text-[9px] px-1.5 py-0 bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 border-red-300 whitespace-nowrap flex-shrink-0" variant="outline">Absent</Badge>
+                                return <Badge className="text-[9px] px-1.5 py-0 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 border-amber-300 whitespace-nowrap flex-shrink-0" variant="outline">Not Clocked In</Badge>
+                              })()}
+                            </div>
+                            {(emp as any).employeeCode && <div className="text-[10px] font-mono text-muted-foreground">{(emp as any).employeeCode}</div>}
                             {emp.email && <div className="text-[10px] text-muted-foreground truncate">{emp.email}</div>}
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <button
@@ -1840,17 +1876,15 @@ export default function SchedulingPage() {
         </div>
       )}
 
-      {/* Schedule Details by Day */}
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
+      {/* Week Schedule Dialog */}
+      <Dialog open={showWeekSchedule} onOpenChange={setShowWeekSchedule}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
               <Calendar className="h-4 w-4" />
               Schedule Details by Day
-            </CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
+            </DialogTitle>
+          </DialogHeader>
           {Object.keys(weekSchedules).length > 0 ? (
             <div className="space-y-2">
               {(() => {
@@ -1895,7 +1929,8 @@ export default function SchedulingPage() {
                   if (dayAttendance && Object.keys(dayAttendance).length > 0) {
                     assignments.forEach((ba: any) => {
                       (ba.employees || []).forEach((emp: any) => {
-                        if (dayAttendance[String(emp.employeeId)] === "present") presentIds.add(String(emp.employeeId))
+                        const pStatus = dayAttendance[String(emp.employeeId)]
+                        if (pStatus === "present" || pStatus === "undertime") presentIds.add(String(emp.employeeId))
                       })
                     })
                   }
@@ -1932,6 +1967,7 @@ export default function SchedulingPage() {
                                   let status: string
                                   let statusColor: string
                                   if (attStatus === "present") { status = "Present"; statusColor = "text-green-600" }
+                                  else if (attStatus === "undertime") { status = "Undertime"; statusColor = "text-cyan-600" }
                                   else if (attStatus === "absent") { status = "Absent"; statusColor = "text-red-600" }
                                   else {
                                     // No attendance record — determine status from date context
@@ -1949,6 +1985,7 @@ export default function SchedulingPage() {
                                     <div key={employee.employeeId} className="flex items-center justify-between text-xs p-1.5 rounded bg-background border">
                                       <div className="flex-1">
                                         <div className="font-medium">{employee.employeeName}</div>
+                                        {(() => { const ec = fireEmployees.find((e: any) => String(e.id) === String(employee.employeeId)); return ec?.employeeCode ? <div className="text-[10px] font-mono text-muted-foreground">{ec.employeeCode}</div> : null })()}
                                         <div className="text-muted-foreground">{employee.shift || "AM"} Shift</div>
                                       </div>
                                       <div className="text-right">
@@ -1974,8 +2011,8 @@ export default function SchedulingPage() {
               No schedules saved yet. Generate a rotation or drag crew to branches to create schedules.
             </div>
           )}
-        </CardContent>
-      </Card>
+        </DialogContent>
+      </Dialog>
 
       {/* Duration Dialog - shown after dropping a crew member on a branch */}
       <Dialog open={showDurationDialog} onOpenChange={(open) => { if (!open) { setShowDurationDialog(false); setPendingDrop(null) } }}>

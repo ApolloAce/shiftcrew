@@ -20,6 +20,7 @@ export default function EmployeeDashboard() {
     surname: string
     status?: string
     branchId?: string | number | null
+    employeeCode?: string
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [todaySchedule, setTodaySchedule] = useState<any | null>(null)
@@ -333,9 +334,13 @@ export default function EmployeeDashboard() {
 
       if (res.ok) {
         const data = await res.json()
-        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut }))
+        setLatestTimeRecord((prev: any) => ({ ...prev, timeOut: data.timeOut || timeOut, status: data.status || prev?.status }))
         setShowClockOutModal(false)
-        showNotification("success", "Clocked Out", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}.`)
+        if (data.status === "undertime") {
+          showNotification("info", "Undertime", `Clocked out at ${formatTime(data.timeOut || timeOut)} — total work time is less than 9 hours. Marked as Undertime.`)
+        } else {
+          showNotification("success", "Clocked Out", `You have successfully clocked out at ${formatTime(data.timeOut || timeOut)}.`)
+        }
       } else {
         const err = await res.json().catch(() => ({}))
         showNotification("error", "Error", err.message || "Failed to clock out. Please try again.")
@@ -421,7 +426,7 @@ export default function EmployeeDashboard() {
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Employee Dashboard</h1>
-        <p className="text-muted-foreground">Welcome back, {currentUser?.firstName}!</p>
+        <p className="text-muted-foreground">Welcome back, {currentUser?.firstName}! {currentUser?.employeeCode && <span className="font-mono text-xs ml-1">({currentUser.employeeCode})</span>}</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -473,10 +478,10 @@ export default function EmployeeDashboard() {
               <div className="flex justify-between items-center">
                 <div className="text-sm text-muted-foreground">Status:</div>
                 <Badge
-                  variant={isOnLeave ? "default" : (latestTimeRecord && latestTimeRecord.status === "present" ? "default" : "outline")}
-                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : ""}
+                  variant={isOnLeave ? "default" : (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") ? "default" : "outline")}
+                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600 text-white" : ""}
                 >
-                  {isOnLeave ? "On Leave" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
+                  {isOnLeave ? "On Leave" : latestTimeRecord?.status === "undertime" ? "Undertime" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
                 </Badge>
               </div>
 
@@ -508,12 +513,12 @@ export default function EmployeeDashboard() {
                   <div className="text-center text-sm text-muted-foreground">
                     No schedule assigned — clock-in unavailable
                   </div>
-                ) : shiftExpired && (!latestTimeRecord || latestTimeRecord.status !== "present") ? (
+                ) : shiftExpired && (!latestTimeRecord || (latestTimeRecord.status !== "present" && latestTimeRecord.status !== "undertime")) ? (
                   <div className="text-center space-y-2">
                     <Badge variant="destructive">Absent</Badge>
                     <p className="text-xs text-muted-foreground">Shift has ended — clock-in is no longer available</p>
                   </div>
-                ) : !latestTimeRecord || latestTimeRecord.status !== "present" ? (
+                ) : !latestTimeRecord || (latestTimeRecord.status !== "present" && latestTimeRecord.status !== "undertime") ? (
                   <Button className="w-full" onClick={handleClockInAttempt} disabled={isLoading}>
                     <Navigation className="mr-2 h-4 w-4" />
                     Clock In

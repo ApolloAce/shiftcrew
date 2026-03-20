@@ -5,7 +5,7 @@ import { useState, useEffect } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
-import { Menu, Users, UserPlus, Building, Calendar, BarChart, FileText, AlertTriangle } from "lucide-react"
+import { Menu, Users, Building, Calendar, BarChart, FileText, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useMobile } from "@/hooks/use-mobile"
 import { Badge } from "@/components/ui/badge"
@@ -22,7 +22,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const [pendingLeaveCount, setPendingLeaveCount] = useState(0)
 
   useEffect(() => {
-    // Check if user is logged in
     const user = sessionStorage.getItem("currentUser")
     if (!user) {
       router.push("/")
@@ -31,10 +30,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
     try {
       const userData = JSON.parse(user)
-
-      // Check if the user is an admin (check both isAdmin flag and role field)
       if (!userData.isAdmin && userData.role !== "admin") {
-        // Not an admin user, redirect to appropriate page
         if (userData.isEmployee || userData.role === "employee") {
           router.push("/employee")
         } else {
@@ -42,15 +38,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
         }
         return
       }
-
-      // Ensure name is available for display (derive from firstName/surname if missing)
       if (!userData.name && (userData.firstName || userData.surname)) {
         userData.name = `${userData.firstName || ""} ${userData.surname || ""}`.trim()
       }
-
       setCurrentUser(userData)
-
-      // Fetch pending leave count
       fetchPendingLeaveCount()
     } catch (error) {
       console.error("Error parsing user data:", error)
@@ -65,7 +56,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       .catch(() => {})
   }
 
-  // Listen for custom events to refresh badge count
   useEffect(() => {
     const handleLeaveUpdate = () => fetchPendingLeaveCount()
     window.addEventListener("leave-updated", handleLeaveUpdate)
@@ -81,7 +71,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navigation = [
     { name: "Dashboard", path: "/dashboard", icon: <BarChart className="h-5 w-5" /> },
     { name: "Employees", path: "/dashboard/employees", icon: <Users className="h-5 w-5" /> },
-    { name: "Employee Registration", path: "/dashboard/registration", icon: <UserPlus className="h-5 w-5" /> },
     { name: "Branch Management", path: "/dashboard/branches", icon: <Building className="h-5 w-5" /> },
     { name: "Crew Assignment", path: "/dashboard/scheduling", icon: <Calendar className="h-5 w-5" /> },
     { name: "Leave Approvals", path: "/dashboard/leave-approvals", icon: <FileText className="h-5 w-5" />, badge: pendingLeaveCount },
@@ -132,7 +121,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <SheetContent side="left" className="w-64 p-4 bg-primary text-primary-foreground">
             <div className="flex flex-col h-full">
               <div className="py-4 border-b border-primary-600 mb-4">
-                <h1 className="text-2xl font-bold">ShiftCrew</h1>
+                <div className="flex items-center gap-3">
+                  <img src="/placeholder-logo.svg" alt="ShiftCrew" className="h-8 w-8" />
+                  <h1 className="text-2xl font-bold">ShiftCrew</h1>
+                </div>
               </div>
               <NavLinks />
               <div className="mt-auto pt-4 border-t border-primary-600">
@@ -154,7 +146,10 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       ) : (
         <aside className="fixed inset-y-0 left-0 w-64 border-r border-primary-200 bg-primary p-4 flex flex-col">
           <div className="py-4 border-b border-primary-600 mb-4">
-            <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
+            <div className="flex items-center gap-3">
+              <img src="/placeholder-logo.svg" alt="ShiftCrew" className="h-8 w-8" />
+              <h1 className="text-2xl font-bold text-primary-foreground">ShiftCrew</h1>
+            </div>
           </div>
           <NavLinks />
           <div className="mt-auto pt-4 border-t border-primary-600">

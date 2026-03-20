@@ -65,13 +65,34 @@ export async function POST(req: Request) {
       }
     }
 
-    // For clock-out, update only timeOut
+    // For clock-out, update timeOut and compute undertime based on 9hr rule (8hr work + 1hr break)
     if (body.action === "clock-out") {
-      await execute(
-        `UPDATE daily_attendance SET timeOut = ?, updatedAt = ? WHERE id = ?`,
-        [body.timeOut || null, now, docId]
+      // Fetch the existing record to get timeIn
+      const existing = await query(
+        "SELECT timeIn, status FROM daily_attendance WHERE id = ? LIMIT 1",
+        [docId]
       );
-      return NextResponse.json({ id: docId, timeOut: body.timeOut }, { status: 200 });
+      const timeIn = existing[0]?.timeIn;
+      const timeOut = body.timeOut;
+      let status = existing[0]?.status || "present";
+
+      // Compute total work hours: if less than 9 hours (8hr work + 1hr break), mark undertime
+      if (timeIn && timeOut) {
+        const [inH, inM] = timeIn.split(":").map(Number);
+        const [outH, outM] = timeOut.split(":").map(Number);
+        const totalMinutes = (outH * 60 + outM) - (inH * 60 + inM);
+        if (totalMinutes < 540) { // 9 hours = 540 minutes
+          status = "undertime";
+        } else {
+          status = "present";
+        }
+      }
+
+      await execute(
+        `UPDATE daily_attendance SET timeOut = ?, status = ?, updatedAt = ? WHERE id = ?`,
+        [timeOut || null, status, now, docId]
+      );
+      return NextResponse.json({ id: docId, timeOut, status }, { status: 200 });
     }
 
     // Clock-in or general attendance save

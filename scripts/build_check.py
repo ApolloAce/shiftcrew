@@ -54,11 +54,12 @@ elif action == "force":
 elif action == "rebuild":
     cmd = "cd /var/www/shiftcrew && rm -rf .next && nohup npx next build > /tmp/nextbuild.log 2>&1 < /dev/null & echo BUILD_STARTED"
     i, o, e = c.exec_command(cmd, timeout=30)
-    out = o.read().decode().strip()
-    err = e.read().decode().strip()
+    o.channel.settimeout(10)
+    try:
+        out = o.read().decode().strip()
+    except Exception:
+        out = "BUILD_STARTED"
     print(out or "BUILD_STARTED")
-    if err:
-        print(err)
 
 elif action == "restart":
     i, o, e = c.exec_command("cd /var/www/shiftcrew && pm2 restart shiftcrew --update-env 2>&1", timeout=30)

@@ -14,6 +14,7 @@ export type Employee = {
   address?: string
   emergencyContact?: string
   position?: string
+  employeeCode?: string
   hireDate?: string
   branchId?: string
   createdAt?: string

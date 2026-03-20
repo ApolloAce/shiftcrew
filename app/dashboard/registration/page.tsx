@@ -79,7 +79,7 @@ export default function RegistrationPage() {
         showNotification(
           "success",
           "Employee Account Created",
-          `${formData.firstName} ${formData.surname} has been registered with login access.`
+          `${formData.firstName} ${formData.surname} has been registered. Employee ID: ${data.employeeCode}`
         );
 
         // Reset form
