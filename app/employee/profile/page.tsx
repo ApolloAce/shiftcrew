@@ -6,13 +6,16 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { useNotification } from "@/components/notification-provider"
-import { User, MapPin, Phone, Mail, Shield, Calendar, Hash } from "lucide-react"
+import { User, MapPin, Phone, Mail, Shield, Calendar, Hash, Eye, EyeOff } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 export default function EmployeeProfilePage() {
   const { showNotification } = useNotification()
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   const formatJoinedDate = (value: string) => {
     const parsed = new Date(value)
@@ -68,7 +71,7 @@ export default function EmployeeProfilePage() {
       if (employeeRes) {
         setEmployeeData(employeeRes)
         setProfileForm({
-          phone: employeeRes.phone || "",
+          phone: (employeeRes.phone || "").replace(/^\+63/, ""),
           email: employeeRes.email || "",
           address: employeeRes.address || "",
           emergencyContact: employeeRes.emergencyContact || "",
@@ -133,7 +136,7 @@ export default function EmployeeProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: currentUser.id,
-          phone: profileForm.phone,
+          phone: profileForm.phone ? `+63${profileForm.phone}` : "",
           email: profileForm.email,
           address: profileForm.address,
           emergencyContact: profileForm.emergencyContact,
@@ -143,7 +146,7 @@ export default function EmployeeProfilePage() {
       if (res.ok) {
         setEmployeeData((prev: any) => ({
           ...prev,
-          phone: profileForm.phone,
+          phone: profileForm.phone ? `+63${profileForm.phone}` : "",
           email: profileForm.email,
           address: profileForm.address,
           emergencyContact: profileForm.emergencyContact,
@@ -321,7 +324,22 @@ export default function EmployeeProfilePage() {
 
                   <div className="space-y-2">
                     <Label htmlFor="phone">Phone Number</Label>
-                    <Input id="phone" name="phone" type="tel" value={profileForm.phone} onChange={handleInputChange} />
+                    <div className="flex">
+                      <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-input bg-muted text-muted-foreground text-sm">+63</span>
+                      <Input
+                        id="phone"
+                        name="phone"
+                        type="tel"
+                        placeholder="9XXXXXXXXX"
+                        value={profileForm.phone}
+                        onChange={(e) => {
+                          const val = e.target.value.replace(/\D/g, "").slice(0, 10)
+                          setProfileForm((prev) => ({ ...prev, phone: val }))
+                        }}
+                        maxLength={10}
+                        className="rounded-l-none border-l-0"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -350,35 +368,65 @@ export default function EmployeeProfilePage() {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="currentPassword">Current Password</Label>
-                    <Input
-                      id="currentPassword"
-                      name="currentPassword"
-                      type="password"
-                      value={profileForm.currentPassword}
-                      onChange={handleInputChange}
-                    />
+                    <div className="relative">
+                      <Input
+                        id="currentPassword"
+                        name="currentPassword"
+                        type={showCurrentPassword ? "text" : "password"}
+                        value={profileForm.currentPassword}
+                        onChange={handleInputChange}
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                        tabIndex={-1}
+                      >
+                        {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="password">New Password</Label>
-                    <Input
-                      id="password"
-                      name="password"
-                      type="password"
-                      value={profileForm.password}
-                      onChange={handleInputChange}
-                    />
+                    <div className="relative">
+                      <Input
+                        id="password"
+                        name="password"
+                        type={showNewPassword ? "text" : "password"}
+                        value={profileForm.password}
+                        onChange={handleInputChange}
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        tabIndex={-1}
+                      >
+                        {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                    <Input
-                      id="confirmPassword"
-                      name="confirmPassword"
-                      type="password"
-                      value={profileForm.confirmPassword}
-                      onChange={handleInputChange}
-                    />
+                    <div className="relative">
+                      <Input
+                        id="confirmPassword"
+                        name="confirmPassword"
+                        type={showConfirmPassword ? "text" : "password"}
+                        value={profileForm.confirmPassword}
+                        onChange={handleInputChange}
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        tabIndex={-1}
+                      >
+                        {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   <Button

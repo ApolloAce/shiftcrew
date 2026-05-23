@@ -72,7 +72,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: "Dashboard", path: "/dashboard", icon: <BarChart className="h-5 w-5" /> },
     { name: "Employees", path: "/dashboard/employees", icon: <Users className="h-5 w-5" /> },
     { name: "Branch Management", path: "/dashboard/branches", icon: <Building className="h-5 w-5" /> },
-    { name: "Crew Assignment", path: "/dashboard/scheduling", icon: <Calendar className="h-5 w-5" /> },
+    { name: "Schedules", path: "/dashboard/scheduling", icon: <Calendar className="h-5 w-5" /> },
     { name: "Leave Approvals", path: "/dashboard/leave-approvals", icon: <FileText className="h-5 w-5" />, badge: pendingLeaveCount },
     { name: "Absences", path: "/dashboard/absences", icon: <AlertTriangle className="h-5 w-5" /> },
     { name: "Reports", path: "/dashboard/reports", icon: <BarChart className="h-5 w-5" /> },
@@ -129,8 +129,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <NavLinks />
               <div className="mt-auto pt-4 border-t border-primary-600">
                 <div className="mb-2">
-                  <div className="font-medium">{currentUser.name}</div>
-                  <div className="text-sm text-primary-foreground/80">{currentUser.role}</div>
+                  <div className="font-medium capitalize">{currentUser.role}</div>
                 </div>
                 <Button
                   variant="secondary"
@@ -154,8 +153,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           <NavLinks />
           <div className="mt-auto pt-4 border-t border-primary-600">
             <div className="mb-2">
-              <div className="font-medium text-primary-foreground">{currentUser.name}</div>
-              <div className="text-sm text-primary-foreground/80">{currentUser.role}</div>
+              <div className="font-medium text-primary-foreground capitalize">{currentUser.role}</div>
             </div>
             <Button
               variant="secondary"

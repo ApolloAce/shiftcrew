@@ -47,6 +47,15 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+
+    // Block attendance recording on Sundays (day-off)
+    if (body.date) {
+      const dateObj = new Date(body.date + "T00:00:00");
+      if (dateObj.getDay() === 0) {
+        return NextResponse.json({ message: "Sunday is a day-off. Attendance cannot be recorded." }, { status: 400 });
+      }
+    }
+
     const docId = `${body.employeeId}_${body.date}`;
     const now = mysqlNow();
 

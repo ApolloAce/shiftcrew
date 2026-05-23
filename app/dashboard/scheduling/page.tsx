@@ -112,11 +112,18 @@ export default function SchedulingPage() {
   const [fireEmployees, setFireEmployees] = useState<Array<any>>([])
 
   // derive a lightweight list of branches for the rotation algorithm — memoized
-  const branchesList = useMemo(() => (
-    fireBranches.length > 0
+  // Deduplicate by branch name to prevent duplicate columns showing the same employees
+  const branchesList = useMemo(() => {
+    const raw = fireBranches.length > 0
       ? fireBranches.map((b: any) => ({ id: b.id, name: b.branchName || b.name, address: b.address }))
       : (branches || []).map((b: any) => ({ id: b.id, name: b.branchName, address: b.address }))
-  ), [fireBranches, branches])
+    const seen = new Set<string>()
+    return raw.filter(b => {
+      if (seen.has(b.name)) return false
+      seen.add(b.name)
+      return true
+    })
+  }, [fireBranches, branches])
 
   // whether at least one crew has been assigned to a branch (used to require initial manual seeding)
   const crews = storeCrews
@@ -473,6 +480,7 @@ export default function SchedulingPage() {
       for (let i = 0; i < 7; i++) {
         const d = new Date(monday)
         d.setDate(monday.getDate() + i)
+        if (d.getDay() === 0) continue // Skip Sunday (day-off)
         const dateISO = formatDateLocal(d)
         // Only fetch for today and past days (not future)
         if (d <= today) {
@@ -815,11 +823,12 @@ export default function SchedulingPage() {
             shiftEnd: a.shiftEnd,
           }))
 
-          // Save 7 schedule documents in parallel, skip manually scheduled dates
+          // Save schedule documents in parallel, skip manually scheduled dates and Sundays
           const savePromises: Promise<string | null>[] = []
           for (let i = 0; i < 7; i++) {
             const d = new Date(currentMonday)
             d.setDate(currentMonday.getDate() + i)
+            if (d.getDay() === 0) continue // Skip Sunday (day-off)
             const dayISO = formatDateLocal(d)
 
             if (manualDates.has(dayISO)) continue
@@ -1150,6 +1159,7 @@ export default function SchedulingPage() {
               for (let i = 0; i < 7; i++) {
                 const d = new Date(thisMonday)
                 d.setDate(thisMonday.getDate() + i)
+                if (d.getDay() === 0) continue // Skip Sunday (day-off)
                 const dayISO = formatDateLocal(d)
                 await addScheduleToFirestore({
                   date: weekStart,
@@ -1244,15 +1254,14 @@ export default function SchedulingPage() {
   // Compute today's ISO string once per render (not per employee in loops)
   const todayISO = formatDateLocal(new Date())
 
-  // Quick stats derived from state
-  const assignedCount = useMemo(() => {
-    if (!fireEmployees || fireEmployees.length === 0) return Object.keys(currentAssignments).length
-    const activeIds = new Set(fireEmployees.map((e: any) => String(e.id)))
-    return Object.keys(currentAssignments).filter(id => activeIds.has(id)).length
-  }, [currentAssignments, fireEmployees])
-  const manualCount = useMemo(() => Object.values(currentAssignments).filter(a => a.isManual).length, [currentAssignments])
-  const totalEmployees = useMemo(() => (fireEmployees?.length || crews.length), [fireEmployees, crews])
+  // Set of branch names that actually exist (used to detect orphaned assignments)
+  const branchNameSet = useMemo(() => new Set(branchesList.map(b => b.name)), [branchesList])
 
+  const onLeaveCount = useMemo(() => {
+    if (!fireEmployees || fireEmployees.length === 0) return 0
+    return fireEmployees.filter((e: any) => onLeaveMap.has(String(e.id))).length
+  }, [fireEmployees, onLeaveMap])
+  const manualCount = useMemo(() => Object.values(currentAssignments).filter(a => a.isManual).length, [currentAssignments])
 
   // --- Drag-and-drop computed values and handlers ---
 
@@ -1267,7 +1276,10 @@ export default function SchedulingPage() {
       // On-leave employees always show in unassigned pool
       if (onLeaveMap.has(empId)) return true
       const a = currentAssignments[empId]
-      if (a) return false // assigned via schedule
+      if (a) {
+        // If assigned to a branch that no longer exists, treat as unassigned
+        return !branchNameSet.has(a.branchName)
+      }
       if (!hasAssignments && emp.branchId) return false // DB branch fallback
       return true
     }).filter(emp => {
@@ -1276,7 +1288,7 @@ export default function SchedulingPage() {
       const name = `${emp.firstName} ${emp.surname}`.toLowerCase()
       return name.includes(q) || ((emp as any).employeeCode || "").toLowerCase().includes(q)
     })
-  }, [fireEmployees, currentAssignments, searchQuery, onLeaveMap])
+  }, [fireEmployees, currentAssignments, searchQuery, onLeaveMap, branchNameSet])
 
   // Crew assigned to a specific branch (by name), filtered by search query
   // Excludes employees who are on approved leave
@@ -1299,6 +1311,14 @@ export default function SchedulingPage() {
       return name.includes(q) || ((emp as any).employeeCode || "").toLowerCase().includes(q)
     })
   }, [fireEmployees, fireBranches, currentAssignments, searchQuery, onLeaveMap])
+
+  // Quick stats — derived directly from the displayed cards so they always match.
+  // assignedCount = exact sum of employees shown across all branch columns
+  // totalEmployees = assigned + unassigned (every visible card is counted)
+  const assignedCount = useMemo(() => {
+    return branchesList.reduce((sum, branch) => sum + getCrewForBranchByName(branch.name).length, 0)
+  }, [branchesList, getCrewForBranchByName])
+  const totalEmployees = assignedCount + unassignedEmployees.length
 
   // Handle duration dialog confirmation after a drag-and-drop assignment
   const handleDurationConfirm = async (duration: "today" | "rest_of_week" | "full_week") => {
@@ -1330,6 +1350,7 @@ export default function SchedulingPage() {
       for (let i = 0; i < 7; i++) {
         const d = new Date(monday)
         d.setDate(monday.getDate() + i)
+        if (d.getDay() === 0) continue // Skip Sunday (day-off)
         if (d >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
           datesToSave.push(formatDateLocal(d))
         }
@@ -1339,6 +1360,7 @@ export default function SchedulingPage() {
       for (let i = 0; i < 7; i++) {
         const d = new Date(monday)
         d.setDate(monday.getDate() + i)
+        if (d.getDay() === 0) continue // Skip Sunday (day-off)
         datesToSave.push(formatDateLocal(d))
       }
     }
@@ -1524,7 +1546,7 @@ export default function SchedulingPage() {
         </div>
       )}
 
-      {/* Quick stats */}
+      {/* Quick stats — Total = Assigned + Unassigned (On Leave is info only, subset of Unassigned pool) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="flex items-center gap-2.5 p-3 rounded-lg border bg-card">
           <div className="p-2 rounded-md bg-blue-100 dark:bg-blue-900/40">
@@ -1549,17 +1571,17 @@ export default function SchedulingPage() {
             <AlertTriangle className="h-4 w-4 text-amber-600" />
           </div>
           <div>
-            <div className="text-lg font-semibold leading-none">{totalEmployees - assignedCount}</div>
+            <div className="text-lg font-semibold leading-none">{Math.max(0, totalEmployees - assignedCount)}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Unassigned</div>
           </div>
         </div>
         <div className="flex items-center gap-2.5 p-3 rounded-lg border bg-card">
           <div className="p-2 rounded-md bg-purple-100 dark:bg-purple-900/40">
-            <ArrowRightLeft className="h-4 w-4 text-purple-600" />
+            <Clock className="h-4 w-4 text-purple-600" />
           </div>
           <div>
-            <div className="text-lg font-semibold leading-none">{manualCount}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">Manual</div>
+            <div className="text-lg font-semibold leading-none">{onLeaveCount}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">On Leave</div>
           </div>
         </div>
       </div>
@@ -1662,6 +1684,7 @@ export default function SchedulingPage() {
               const saves: Promise<any>[] = []
               for (let i = 0; i < 7; i++) {
                 const d = new Date(mon); d.setDate(mon.getDate() + i)
+                if (d.getDay() === 0) continue // Skip Sunday (day-off)
                 if (d >= new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
                   const dISO = formatDateLocal(d)
                   saves.push(addScheduleToFirestore({ date: monISO, scheduleFor: dISO, time: new Date().toTimeString().slice(0, 5), weekStart: monISO, weekEnd: sunISO, manuallyScheduled: true, assignments: payload }).catch(() => null))
@@ -1910,6 +1933,7 @@ export default function SchedulingPage() {
                 for (let i = 0; i < 7; i++) {
                   const currentDate = new Date(monday)
                   currentDate.setDate(monday.getDate() + i)
+                  if (currentDate.getDay() === 0) continue // Skip Sunday (day-off)
                   const dayName = days[i]
                   const dateStr = currentDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })
                   const dateISO = formatDateLocal(currentDate)

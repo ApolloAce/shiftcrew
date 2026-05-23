@@ -23,6 +23,7 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
     firstName: string
     surname: string
     type: string
+    employeeCode?: string | null
     branchId?: string | number | null
   } | null>(null)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
@@ -149,9 +150,9 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
                 <div className="mb-2">
                   <div className="font-medium">
                     {currentUser.firstName} {currentUser.surname}
-                    <p className="text-xs text-primary-foreground/60 capitalize">{currentUser.type}</p>
                   </div>
-                  <div className="text-sm text-primary-foreground/80">{currentUser.type}</div>
+                  {currentUser.employeeCode && <div className="text-xs text-primary-foreground/60">ID: {currentUser.employeeCode}</div>}
+                  <div className="text-sm text-primary-foreground/80">{currentUser.type === "part-time" ? "Part Time Employee" : "Full Time Employee"}</div>
                 </div>
                 <Button
                   variant="secondary"
@@ -179,7 +180,8 @@ export default function EmployeeLayout({ children }: EmployeeLayoutProps) {
               <div className="font-medium text-primary-foreground">
                 {currentUser.firstName} {currentUser.surname}
               </div>
-              <div className="text-sm text-primary-foreground/80">{currentUser.type}</div>
+              {currentUser.employeeCode && <div className="text-xs text-primary-foreground/60">ID: {currentUser.employeeCode}</div>}
+              <div className="text-sm text-primary-foreground/80">{currentUser.type === "part-time" ? "Part Time Employee" : "Full Time Employee"}</div>
             </div>
             <Button
               variant="secondary"

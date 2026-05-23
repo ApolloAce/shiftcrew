@@ -12,6 +12,14 @@ export async function GET(req: Request) {
     const archived = url.searchParams.get("archived");
     const active = url.searchParams.get("active");
     const id = url.searchParams.get("id");
+    const role = url.searchParams.get("role");
+
+    // Fetch admin user
+    if (role === "admin") {
+      const rows = await query("SELECT * FROM users WHERE role = 'admin' LIMIT 1", []);
+      if (rows.length === 0) return NextResponse.json(null, { status: 404 });
+      return NextResponse.json(mapUser(rows[0]));
+    }
 
     if (id) {
       const rows = await query("SELECT * FROM users WHERE id = ? AND role = 'employee'", [id]);

@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Eye, EyeOff } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useCrewStore } from "@/lib/cleanStore"
 
@@ -107,14 +107,14 @@ export default function LoginPage() {
       <div className="absolute bottom-0 right-0 w-96 h-96 bg-black/10 rounded-full translate-x-1/4 translate-y-1/4 blur-3xl" />
       <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-white/5 rounded-full -translate-x-1/2 -translate-y-1/2 blur-2xl" />
 
-      <Card className="w-full max-w-sm shadow-2xl border-0 backdrop-blur-sm bg-white/95 dark:bg-slate-900/95 relative z-10">
-        <CardHeader className="text-center pb-2 pt-8">
+      <Card className="w-full max-w-sm shadow-2xl border-0 backdrop-blur-sm bg-white/95 dark:bg-slate-900/95 relative z-10 overflow-hidden">
+        <CardHeader className="text-center pb-4 pt-8 bg-[#2c4a58]">
           <div className="mx-auto mb-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-16 w-16 rounded-xl object-contain mx-auto drop-shadow-md" />
+            <img src="/placeholder-logo.png" alt="ShiftCrew" className="h-28 w-28 rounded-xl object-contain mx-auto drop-shadow-lg" />
           </div>
-          <CardTitle className="text-2xl font-bold tracking-tight">ShiftCrew</CardTitle>
-          <CardDescription className="text-sm text-muted-foreground">Crew Management System</CardDescription>
+          <CardTitle className="text-2xl font-bold tracking-tight text-white">ShiftCrew</CardTitle>
+          <CardDescription className="text-sm text-white/80">Crew Management System</CardDescription>
         </CardHeader>
 
         <CardContent className="pt-4 pb-6 px-6">
@@ -174,15 +174,11 @@ export default function LoginPage() {
               </Alert>
             )}
 
-            <Button type="submit" className="w-full h-10 bg-[#4e7a8e] hover:bg-[#3e6272] text-white">
+            <Button type="submit" className="w-full h-10 bg-[#2c4a58] hover:bg-[#1e3540] text-white">
               Log In
             </Button>
           </form>
         </CardContent>
-
-        <CardFooter className="justify-center pb-6 pt-0">
-          <p className="text-xs text-muted-foreground">&copy; {new Date().getFullYear()} ShiftCrew. All rights reserved.</p>
-        </CardFooter>
       </Card>
     </div>
   )

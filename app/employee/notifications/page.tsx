@@ -73,6 +73,7 @@ export default function EmployeeNotificationsPage() {
         for (const sched of schedules) {
           const schedDate = sched.scheduleFor || sched.date
           if (schedDate < today) continue
+          if (new Date(schedDate + "T00:00:00").getDay() === 0) continue // Skip Sunday (day-off)
 
           let assignments = sched.branchAssignments
           if (typeof assignments === "string") {

@@ -9,7 +9,7 @@ import { useDialog } from "@/components/dialog-provider"
 import { getActiveEmployees } from "@/lib/firestore-employee-service"
 import { getAllLeaveRequests, approveLeaveRequest, rejectLeaveRequest } from "@/lib/firestore-leave-service"
 import { format, parseISO, differenceInDays } from "date-fns"
-import { Calendar, CheckCircle, XCircle } from "lucide-react"
+import { Calendar, CheckCircle, XCircle, User, Clock, FileText } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 
@@ -146,37 +146,49 @@ export default function LeaveApprovalsPage() {
                 const days = differenceInDays(endDate, startDate) + 1
 
                 return (
-                  <div key={request.id} className="p-4 border rounded-md bg-amber-50 dark:bg-amber-950/20">
-                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-medium text-lg">{getEmployeeName(request.employeeId)}</h3>
-                          <Badge variant="outline" className="capitalize">
-                            Leave
-                          </Badge>
+                  <div key={request.id} className="border rounded-lg overflow-hidden shadow-sm">
+                    <div className="bg-amber-50 dark:bg-amber-950/20 px-5 py-3 border-b flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+                          <User className="h-4 w-4 text-amber-700 dark:text-amber-400" />
                         </div>
-
-                        <div className="text-sm text-muted-foreground mt-1">
-                          {format(startDate, "MMM d, yyyy")} - {format(endDate, "MMM d, yyyy")} ({days} day
-                          {days !== 1 ? "s" : ""})
-                        </div>
-
-                        {request.reason && (
-                          <div className="mt-2 text-sm">
-                            <span className="text-muted-foreground">Reason: </span>
-                            {request.reason}
+                        <div>
+                          <h3 className="font-semibold text-base">{getEmployeeName(request.employeeId)}</h3>
+                          <div className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            Requested {request.createdAt ? format(new Date(request.createdAt), "MMM d, yyyy") : format(new Date(), "MMM d, yyyy")}
                           </div>
-                        )}
-
-                        <div className="text-xs text-muted-foreground mt-2">
-                          Requested on {format(new Date(), "MMM d, yyyy")}
                         </div>
                       </div>
+                      <Badge className="capitalize bg-amber-500 hover:bg-amber-600 text-white">
+                        {String(request.type || "Leave")}
+                      </Badge>
+                    </div>
 
-                      <div className="flex gap-2">
+                    <div className="px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Calendar className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-medium">{format(startDate, "MMM d, yyyy")} – {format(endDate, "MMM d, yyyy")}</span>
+                          <Badge variant="secondary" className="text-xs">{days} day{days !== 1 ? "s" : ""}</Badge>
+                        </div>
+
+                        {request.reason && (() => {
+                          const reason = String(request.reason)
+                          const isOthers = reason.startsWith("Others: ")
+                          return (
+                            <div className="flex items-start gap-2 text-sm">
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                              {isOthers && <Badge variant="outline" className="shrink-0 text-xs">Others</Badge>}
+                              <span className="text-muted-foreground">{isOthers ? reason.slice(8) : reason}</span>
+                            </div>
+                          )
+                        })()}
+                      </div>
+
+                      <div className="flex gap-2 shrink-0">
                         <Button
-                          variant="outline"
-                          className="border-green-500 text-green-600 hover:bg-green-50 hover:text-green-700"
+                          className="bg-green-600 hover:bg-green-700 text-white"
                           onClick={() => handleApprove(request.id)}
                         >
                           <CheckCircle className="h-4 w-4 mr-2" />
@@ -185,7 +197,7 @@ export default function LeaveApprovalsPage() {
 
                         <Button
                           variant="outline"
-                          className="border-red-500 text-red-600 hover:bg-red-50 hover:text-red-700"
+                          className="border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700"
                           onClick={() => handleReject(request.id)}
                         >
                           <XCircle className="h-4 w-4 mr-2" />

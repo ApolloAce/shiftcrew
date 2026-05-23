@@ -22,15 +22,18 @@ export default function EmployeeLeavePage() {
     id: number | string
     firstName: string
     surname: string
+    type?: string
   } | null>(null)
+  const [employeeType, setEmployeeType] = useState<string>("full-time")
   const [leaveRequests, setLeaveRequests] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [reasonTemplate, setReasonTemplate] = useState("")
 
   const [leaveForm, setLeaveForm] = useState({
     startDate: format(new Date(), "yyyy-MM-dd"),
     endDate: format(new Date(), "yyyy-MM-dd"),
-    type: "vacation",
+    type: "sick",
     reason: "",
   })
 
@@ -41,6 +44,7 @@ export default function EmployeeLeavePage() {
     try {
       const userData = JSON.parse(user)
       setCurrentUser(userData)
+      setEmployeeType(userData.type || "full-time")
 
       if (userData.id) {
         fetchLeaveRequests(userData.id)
@@ -100,8 +104,13 @@ export default function EmployeeLeavePage() {
       return
     }
 
-    if (!leaveForm.reason.trim()) {
-      showNotification("error", "Missing Information", "Please provide a reason for your leave request.")
+    if (!reasonTemplate) {
+      showNotification("error", "Missing Information", "Please select a reason for your leave request.")
+      return
+    }
+
+    if (reasonTemplate === "others" && !leaveForm.reason.trim()) {
+      showNotification("error", "Missing Information", "Please specify the reason for your leave request.")
       return
     }
 
@@ -116,7 +125,7 @@ export default function EmployeeLeavePage() {
           startDate: leaveForm.startDate,
           endDate: leaveForm.endDate,
           type: leaveForm.type,
-          reason: leaveForm.reason,
+          reason: reasonTemplate === "others" ? `Others: ${leaveForm.reason}` : reasonTemplate,
           status: "pending",
         }),
       })
@@ -132,6 +141,7 @@ export default function EmployeeLeavePage() {
           type: "vacation",
           reason: "",
         })
+        setReasonTemplate("")
 
         setIsDialogOpen(false)
         window.dispatchEvent(new Event("leave-updated"))
@@ -231,30 +241,54 @@ export default function EmployeeLeavePage() {
                     <SelectValue placeholder="Select leave type" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="vacation">Vacation</SelectItem>
+                    {employeeType !== "part-time" && <SelectItem value="vacation">Vacation</SelectItem>}
                     <SelectItem value="sick">Sick Leave</SelectItem>
                     <SelectItem value="personal">Personal Leave</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="reason">Reason</Label>
-                <Textarea
-                  id="reason"
-                  name="reason"
-                  placeholder="Briefly explain the reason for your leave request"
-                  value={leaveForm.reason}
-                  onChange={handleInputChange}
-                  rows={3}
-                />
+                <Label>Reason</Label>
+                <Select value={reasonTemplate} onValueChange={(value) => {
+                  setReasonTemplate(value)
+                  if (value !== "others") {
+                    setLeaveForm((prev) => ({ ...prev, reason: value }))
+                  } else {
+                    setLeaveForm((prev) => ({ ...prev, reason: "" }))
+                  }
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a reason" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Not feeling well">Not feeling well</SelectItem>
+                    <SelectItem value="Medical / Dental appointment">Medical / Dental appointment</SelectItem>
+                    <SelectItem value="Family emergency">Family emergency</SelectItem>
+                    <SelectItem value="Personal errands">Personal errands</SelectItem>
+                    <SelectItem value="Mental health day">Mental health day</SelectItem>
+                    <SelectItem value="others">Others</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
+
+              {reasonTemplate === "others" && (
+                <div className="space-y-2">
+                  <Label htmlFor="reason">Specify Reason</Label>
+                  <Input
+                    id="reason"
+                    name="reason"
+                    placeholder="Please specify your reason"
+                    value={leaveForm.reason}
+                    onChange={handleInputChange}
+                  />
+                </div>
+              )}
 
               <Button
                 className="w-full"
                 onClick={handleSubmit}
-                disabled={isLoading || !leaveForm.startDate || !leaveForm.endDate || !leaveForm.reason}
+                disabled={isLoading || !leaveForm.startDate || !leaveForm.endDate || !reasonTemplate || (reasonTemplate === "others" && !leaveForm.reason.trim())}
               >
                 {isLoading ? "Submitting..." : "Submit Request"}
               </Button>
@@ -294,12 +328,16 @@ export default function EmployeeLeavePage() {
                             {days !== 1 ? "s" : ""})
                           </div>
 
-                          {request.reason && (
-                            <div className="mt-2 text-sm">
-                              <span className="text-muted-foreground">Reason: </span>
-                              {request.reason}
-                            </div>
-                          )}
+                          {request.reason && (() => {
+                            const reason = String(request.reason)
+                            const isOthers = reason.startsWith("Others: ")
+                            return (
+                              <div className="mt-2 text-sm flex items-start gap-2">
+                                <Badge variant="outline" className="shrink-0 text-xs">{isOthers ? "Others" : "Reason"}</Badge>
+                                <span>{isOthers ? reason.slice(8) : reason}</span>
+                              </div>
+                            )
+                          })()}
 
                           {request.notes && request.status === "rejected" && (
                             <div className="mt-2 text-sm text-red-600 dark:text-red-400">
@@ -332,13 +370,14 @@ export default function EmployeeLeavePage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
+            {employeeType !== "part-time" && (
             <div>
               <h3 className="text-lg font-medium">Vacation Leave</h3>
               <p className="text-sm text-muted-foreground">
-                Full-time employees are entitled to 15 days of paid vacation leave per year. Part-time employees receive
-                vacation days proportional to their work hours.
+                Full-time employees are entitled to 15 days of paid vacation leave per year.
               </p>
             </div>
+            )}
 
             <div>
               <h3 className="text-lg font-medium">Sick Leave</h3>

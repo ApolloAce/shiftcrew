@@ -389,6 +389,17 @@ export default function EmployeeAttendancePage() {
     return `${formattedHour}:${minutes} ${period}`
   }
 
+  const calculateHoursWorked = (timeIn?: string, timeOut?: string) => {
+    if (!timeIn || !timeOut) return null
+    const [inH, inM] = timeIn.split(":").map(Number)
+    const [outH, outM] = timeOut.split(":").map(Number)
+    const totalMinutes = (outH * 60 + outM) - (inH * 60 + inM)
+    if (totalMinutes <= 0) return null
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return `${hours}h ${minutes}m`
+  }
+
   const today = new Date()
   const startDate = startOfMonth(today)
   const endDate = endOfMonth(today)
@@ -552,6 +563,16 @@ export default function EmployeeAttendancePage() {
                   </div>
                 )}
 
+                {/* Sunday day-off indicator */}
+                {today.getDay() === 0 && (
+                  <div className="p-4 bg-slate-50 dark:bg-slate-950/20 border border-slate-200 dark:border-slate-800 rounded-lg text-center">
+                    <Badge className="bg-slate-500 hover:bg-slate-600 text-white text-base px-4 py-1.5 mb-2">DAY OFF</Badge>
+                    <p className="text-sm text-slate-700 dark:text-slate-300">
+                      Sunday is a day-off. Clock-in is not available.
+                    </p>
+                  </div>
+                )}
+
                 {/* On Leave indicator */}
                 {isOnLeave && (
                   <div className="p-4 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg text-center">
@@ -562,8 +583,8 @@ export default function EmployeeAttendancePage() {
                   </div>
                 )}
 
-                {/* Shift expired — absent indicator */}
-                {!isOnLeave && shiftExpired && !latestTimeRecord?.timeIn && (
+                {/* Shift expired — absent indicator (not on Sunday) */}
+                {!isOnLeave && shiftExpired && !latestTimeRecord?.timeIn && today.getDay() !== 0 && (
                   <div className="p-4 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded-lg text-center">
                     <Badge variant="destructive" className="text-base px-4 py-1.5 mb-2">Absent</Badge>
                     <p className="text-sm text-red-700 dark:text-red-300">
@@ -577,9 +598,11 @@ export default function EmployeeAttendancePage() {
                     <div className="text-sm text-muted-foreground mb-1">Status</div>
                     <Badge
                       variant={latestTimeRecord?.status === "present" || latestTimeRecord?.status === "undertime" || latestTimeRecord?.status === "excused" ? "default" : "outline"}
-                      className={`text-lg px-3 py-1 ${isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-500 hover:bg-green-600" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
+                      className={`text-lg px-3 py-1 ${today.getDay() === 0 ? "bg-slate-500 hover:bg-slate-600 text-white" : isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-500 hover:bg-green-600" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600" : ""}`}
                     >
-                      {isOnLeave
+                      {today.getDay() === 0
+                        ? "Day Off"
+                        : isOnLeave
                         ? "On Leave"
                         : latestTimeRecord?.status === "excused"
                         ? "Excused"
@@ -599,12 +622,17 @@ export default function EmployeeAttendancePage() {
                         Time Out: <span className="font-medium text-foreground">{formatTime(latestTimeRecord.timeOut)}</span>
                       </div>
                     )}
+                    {latestTimeRecord?.timeIn && latestTimeRecord?.timeOut && (
+                      <div className="mt-2 pt-2 border-t text-sm text-muted-foreground">
+                        Hours Worked: <span className="font-semibold text-primary">{calculateHoursWorked(latestTimeRecord.timeIn, latestTimeRecord.timeOut)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex justify-center gap-4">
-                  {/* Hide Clock In when on leave */}
-                  {isOnLeave ? null : (
+                  {/* Hide Clock In/Out on Sunday or on leave */}
+                  {today.getDay() === 0 || isOnLeave ? null : (
                   <>
                   {/* Hide Clock In when shift has expired and no clock-in was made */}
                   {!(shiftExpired && !latestTimeRecord?.timeIn) && (
@@ -660,12 +688,13 @@ export default function EmployeeAttendancePage() {
             <CardContent>
               <div className="mb-6">
                 <h3 className="text-lg font-medium mb-2">{format(today, "MMMM yyyy")}</h3>
-                <div className="flex gap-4 mb-3 text-xs text-muted-foreground">
+                <div className="flex gap-4 mb-3 text-xs text-muted-foreground flex-wrap">
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Present</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 dark:bg-amber-900/30 border"></span> Undertime</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 dark:bg-green-900/30 border"></span> Excused</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-orange-100 dark:bg-orange-900/30 border"></span> On Leave</span>
                   <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 dark:bg-red-900/20 border"></span> Absent</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-100 dark:bg-slate-800/50 border"></span> Day-Off</span>
                 </div>
                 <div className="grid grid-cols-7 gap-2">
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
@@ -685,12 +714,15 @@ export default function EmployeeAttendancePage() {
                     const attendance = getAttendanceForDay(day)
                     const isPast = day < today && !isSameDay(day, today)
                     const dayOfWeek = day.getDay() // 0=Sun, 6=Sat
-                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
+                    const isSunday = dayOfWeek === 0
                     const isFuture = day > today && !isSameDay(day, today)
                     let bgColor = "bg-gray-100 dark:bg-gray-800"
                     let indicator = ""
 
-                    if (attendance) {
+                    if (isSunday) {
+                      bgColor = "bg-slate-100 dark:bg-slate-800/50"
+                      indicator = "OFF"
+                    } else if (attendance) {
                       if (attendance.status === "present") {
                         bgColor = "bg-green-100 dark:bg-green-900/30"
                         indicator = "✓"
@@ -723,7 +755,7 @@ export default function EmployeeAttendancePage() {
                     return (
                       <div key={i} className={`text-center p-2 rounded-md ${bgColor} ${isFuture ? 'opacity-50' : ''}`}>
                         <div className="text-sm">{format(day, "d")}</div>
-                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : indicator === "⏱" ? "text-amber-600" : indicator === "L" ? "text-orange-500" : "text-red-500"}`}>{indicator}</div>}
+                        {indicator && <div className={`text-xs mt-1 ${indicator === "✓" ? "text-green-600" : indicator === "U" ? "text-amber-600" : indicator === "L" ? "text-orange-500" : indicator === "OFF" ? "text-slate-500" : "text-red-500"}`}>{indicator}</div>}
                       </div>
                     )
                   })}
@@ -744,6 +776,11 @@ export default function EmployeeAttendancePage() {
                             <div className="text-sm text-muted-foreground capitalize">
                               Status: {record.status || "Unknown"}
                             </div>
+                            {record.timeIn && record.timeOut && (
+                              <div className="text-sm text-muted-foreground">
+                                {formatTime(record.timeIn)} – {formatTime(record.timeOut)} · <span className="font-medium text-primary">{calculateHoursWorked(record.timeIn, record.timeOut)}</span>
+                              </div>
+                            )}
                           </div>
                           <Badge
                             variant={record.status === "present" || record.status === "undertime" || record.status === "excused" ? "default" : "outline"}

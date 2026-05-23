@@ -50,11 +50,15 @@ export default function EmployeeSchedulePage() {
     const days = eachDayOfInterval({
       start: startOfWeekDate,
       end: endOfWeekDate,
-    })
+    }).filter(d => d.getDay() !== 0) // Exclude Sunday (day-off)
+
+    // Use Saturday as display end
+    const saturday = new Date(startOfWeekDate)
+    saturday.setDate(startOfWeekDate.getDate() + 5)
 
     return {
       startOfCurrentWeek: startOfWeekDate,
-      endOfCurrentWeek: endOfWeekDate,
+      endOfCurrentWeek: saturday,
       weekDays: days,
     }
   }, [currentDate])
@@ -334,7 +338,7 @@ export default function EmployeeSchedulePage() {
         <span className="flex items-center gap-1"><XCircle className="h-3 w-3 text-red-500" /> Absent</span>
       </div>
 
-      <div className="grid grid-cols-7 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         {weekDays.map((day, index) => {
           const schedule = getScheduleForDay(day)
           const attendance = getAttendanceForDay(day)

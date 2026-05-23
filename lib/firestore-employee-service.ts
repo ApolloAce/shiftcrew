@@ -44,6 +44,24 @@ export const getArchivedEmployees = async (): Promise<Employee[]> => {
   return apiFetch(`${API}?archived=true`)
 }
 
+// Get admin user
+export const getAdminUser = async (): Promise<Employee | null> => {
+  try {
+    return await apiFetch(`${API}?role=admin`)
+  } catch {
+    return null
+  }
+}
+
+// Change admin password
+export const changeAdminPassword = async (adminId: string, password: string): Promise<void> => {
+  await apiFetch(API, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: adminId, password }),
+  })
+}
+
 // Add new employee
 export const addEmployee = async (employee: Omit<Employee, "id" | "createdAt" | "updatedAt">): Promise<string> => {
   const data = await apiFetch(API, {

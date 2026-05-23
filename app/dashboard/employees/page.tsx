@@ -9,13 +9,15 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useNotification } from "@/components/notification-provider"
 import { useDialog } from "@/components/dialog-provider"
-import { Archive, ArrowUpDown, ChevronLeft, ChevronRight, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
+import { Archive, ArrowUpDown, ChevronLeft, ChevronRight, KeyRound, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ErrorBoundary } from "@/components/error-boundary"
 import {
   getActiveEmployees,
   getArchivedEmployees,
+  getAdminUser,
+  changeAdminPassword,
   updateEmployee,
   archiveEmployee,
   restoreEmployee,
@@ -189,7 +191,7 @@ function AddEmployeeDialogContent({ onCancel, onSuccess, existingEmployees }: Ad
       const res = await fetch("/api/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...formData, type: mode }),
+        body: JSON.stringify({ ...formData, phone: formData.phone ? `+63${formData.phone}` : "", type: mode }),
       })
       const data = await res.json()
       if (res.ok) {
@@ -254,7 +256,22 @@ function AddEmployeeDialogContent({ onCancel, onSuccess, existingEmployees }: Ad
       <div className="grid grid-cols-2 gap-3">
         <div className="grid gap-1.5">
           <Label htmlFor="addPhone">Phone</Label>
-          <Input id="addPhone" name="phone" type="tel" placeholder="Phone number" value={formData.phone} onChange={handleInputChange} />
+          <div className="flex">
+            <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-input bg-muted text-muted-foreground text-sm">+63</span>
+            <Input
+              id="addPhone"
+              name="phone"
+              type="tel"
+              placeholder="9XXXXXXXXX"
+              value={formData.phone}
+              onChange={(e) => {
+                const val = e.target.value.replace(/\D/g, "").slice(0, 10)
+                setFormData((prev) => ({ ...prev, phone: val }))
+              }}
+              maxLength={10}
+              className="rounded-l-none border-l-0"
+            />
+          </div>
         </div>
         <div className="grid gap-1.5">
           <Label htmlFor="addAddress">Address</Label>
@@ -279,6 +296,7 @@ function EmployeesContent() {
   const [activeCrews, setActiveCrews] = useState<Employee[]>([])
   const [archivedCrews, setArchivedCrews] = useState<Employee[]>([])
   const [todayAttendance, setTodayAttendance] = useState<Record<string, boolean>>({})
+  const [adminUser, setAdminUser] = useState<Employee | null>(null)
   const [typeFilter, setTypeFilter] = useState<"all" | "full-time" | "part-time">("all")
   const [sortField, setSortField] = useState<"employeeCode" | "name" | "type">("name")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
@@ -295,13 +313,15 @@ function EmployeesContent() {
     const fetchEmployees = async () => {
       try {
         setIsLoading(true)
-        const [active, archived, attendance] = await Promise.all([
+        const [active, archived, attendance, admin] = await Promise.all([
           getActiveEmployees(),
           getArchivedEmployees(),
           getTodayAttendance(),
+          getAdminUser(),
         ])
         setActiveCrews(active)
         setArchivedCrews(archived)
+        setAdminUser(admin)
 
         // Build a lookup: employeeId -> true/false based on daily_attendance
         const attendanceMap: Record<string, boolean> = {}
@@ -434,10 +454,10 @@ function EmployeesContent() {
         const employeeName = `${employee.firstName} ${employee.surname}`
 
         openConfirmDialog({
-          title: "Archive this employee?",
+          title: "Deactivate this employee?",
           description:
-            "This will archive the employee record. The employee will no longer appear in active lists, but their data will be preserved and can be restored later if needed.",
-          confirmLabel: "Archive",
+            "This will deactivate the employee record. The employee will no longer appear in active lists, but their data will be preserved and can be restored later if needed.",
+          confirmLabel: "Deactivate",
           confirmVariant: "bg-amber-600 hover:bg-amber-700",
           onConfirm: async () => {
             setIsProcessing(true)
@@ -451,12 +471,12 @@ function EmployeesContent() {
               
               showNotification(
                 "info",
-                "Employee Archived",
-                `${employeeName} has been archived and can be restored if needed.`,
+                "Employee Deactivated",
+                `${employeeName} has been deactivated and can be restored if needed.`,
               )
             } catch (error) {
               console.error("Error archiving employee:", error)
-              showNotification("error", "Error", "Failed to archive employee")
+              showNotification("error", "Error", "Failed to deactivate employee")
             } finally {
               setIsProcessing(false)
             }
@@ -568,6 +588,47 @@ function EmployeesContent() {
     [openConfirmDialog, showNotification, activeCrews, archivedCrews, isProcessing],
   )
 
+  const handleChangeAdminPassword = useCallback(() => {
+    if (!adminUser) return
+    const ChangePasswordContent = () => {
+      const [pw, setPw] = useState("")
+      const [cpw, setCpw] = useState("")
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState("")
+      return (
+        <div className="space-y-4 py-4">
+          <div className="grid gap-2">
+            <Label htmlFor="adminNewPw">New Password</Label>
+            <Input id="adminNewPw" type="password" placeholder="Enter new password" value={pw} onChange={(e) => { setPw(e.target.value); setError("") }} />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="adminConfirmPw">Confirm Password</Label>
+            <Input id="adminConfirmPw" type="password" placeholder="Confirm new password" value={cpw} onChange={(e) => { setCpw(e.target.value); setError("") }} />
+          </div>
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          <div className="flex gap-3 pt-2">
+            <Button variant="outline" className="flex-1" onClick={closeDialog} disabled={saving}>Cancel</Button>
+            <Button className="flex-1" disabled={saving} onClick={async () => {
+              if (!pw || pw.length < 4) { setError("Password must be at least 4 characters"); return }
+              if (pw !== cpw) { setError("Passwords do not match"); return }
+              setSaving(true)
+              try {
+                await changeAdminPassword(adminUser!.id, pw)
+                closeDialog()
+                showNotification("success", "Password Changed", "Admin password has been updated successfully.")
+              } catch (err) {
+                setError("Failed to change password")
+              } finally {
+                setSaving(false)
+              }
+            }}>{saving ? "Saving..." : "Change Password"}</Button>
+          </div>
+        </div>
+      )
+    }
+    openDialog(<ChangePasswordContent />, "Change Admin Password")
+  }, [adminUser, openDialog, closeDialog, showNotification])
+
   const EmployeeList = ({ employees, totalCount, isArchived = false }: { employees: Employee[]; totalCount: number; isArchived?: boolean }) => {
     const totalPages = Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE))
 
@@ -631,7 +692,7 @@ function EmployeesContent() {
                       disabled={isProcessing}
                     >
                       <Archive className="h-4 w-4 mr-1" />
-                      <span className="hidden sm:inline">Archive</span>
+                      <span className="hidden sm:inline">Deactivate</span>
                     </Button>
                   </>
                 ) : (
@@ -664,7 +725,7 @@ function EmployeesContent() {
         ) : (
           <div className="p-8 text-center text-muted-foreground">
             {isArchived
-              ? "No archived employees found."
+              ? "No inactive employees found."
               : "No active employees found. Add employees in the Crew Registration section."}
           </div>
         )}
@@ -766,10 +827,30 @@ function EmployeesContent() {
         >
           <TabsList className="grid w-full grid-cols-2 mb-8">
             <TabsTrigger value="active">Active Employees</TabsTrigger>
-            <TabsTrigger value="archived">Archived Employees</TabsTrigger>
+            <TabsTrigger value="archived">Inactive Employees</TabsTrigger>
           </TabsList>
 
           <TabsContent value="active">
+            {adminUser && (
+              <Card className="mb-4 border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="h-10 w-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-sm">A</div>
+                      <div>
+                        <div className="font-semibold text-lg">Admin (You)</div>
+                        <div className="text-sm text-muted-foreground">{adminUser.email || "Administrator"}</div>
+                      </div>
+                      <Badge className="bg-blue-600">Admin</Badge>
+                    </div>
+                    <Button variant="outline" size="sm" className="border-blue-600 text-blue-600 hover:bg-blue-50" onClick={handleChangeAdminPassword}>
+                      <KeyRound className="h-4 w-4 mr-1" />
+                      Change Password
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
             <Card>
               <CardHeader>
                 <CardTitle>Active Employee List</CardTitle>
@@ -783,7 +864,7 @@ function EmployeesContent() {
           <TabsContent value="archived">
             <Card>
               <CardHeader>
-                <CardTitle>Archived Employee List</CardTitle>
+                <CardTitle>Inactive Employee List</CardTitle>
               </CardHeader>
               <CardContent>
                 <EmployeeList employees={filteredArchivedCrews.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)} totalCount={filteredArchivedCrews.length} isArchived={true} />

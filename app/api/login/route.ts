@@ -8,7 +8,12 @@ export async function POST(req: Request) {
   const { username, email, password } = await req.json();
 
   // Use whichever field is provided
-  const identifier = (email || username || "").toLowerCase();
+  let identifier = (email || username || "").trim().toLowerCase();
+
+  // Auto-append @shiftcrew.com if no domain provided
+  if (identifier && !identifier.includes("@")) {
+    identifier = `${identifier}@shiftcrew.com`;
+  }
 
   if (!identifier || !password) {
     return NextResponse.json({ message: "Missing credentials" }, { status: 400 });
@@ -40,6 +45,7 @@ export async function POST(req: Request) {
       surname: userDoc.surname,
       isAdmin: userDoc.role === "admin",
       isEmployee: !!userDoc.isEmployee,
+      type: userDoc.type || "full-time",
       branchId: userDoc.branchId || null,
       status: userDoc.status || "approved",
       employeeCode: userDoc.employeeCode || null,

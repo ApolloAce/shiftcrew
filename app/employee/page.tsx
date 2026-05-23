@@ -373,6 +373,17 @@ export default function EmployeeDashboard() {
     return `${formattedHour}:${minutes} ${period}`
   }
 
+  const calculateHoursWorked = (timeIn?: string, timeOut?: string) => {
+    if (!timeIn || !timeOut) return null
+    const [inH, inM] = timeIn.split(":").map(Number)
+    const [outH, outM] = timeOut.split(":").map(Number)
+    const totalMinutes = (outH * 60 + outM) - (inH * 60 + inM)
+    if (totalMinutes <= 0) return null
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return `${hours}h ${minutes}m`
+  }
+
   // Show account status message if not approved
   if (accountStatus === "pending") {
     return (
@@ -488,10 +499,10 @@ export default function EmployeeDashboard() {
               <div className="flex justify-between items-center">
                 <div className="text-sm text-muted-foreground">Status:</div>
                 <Badge
-                  variant={isOnLeave ? "default" : (latestTimeRecord?.status === "absent" ? "destructive" : latestTimeRecord?.status === "excused" ? "default" : (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") ? "default" : "outline"))}
-                  className={isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-600 hover:bg-green-700 text-white" : ""}
+                  variant={new Date().getDay() === 0 ? "outline" : isOnLeave ? "default" : (latestTimeRecord?.status === "absent" ? "destructive" : latestTimeRecord?.status === "excused" ? "default" : (latestTimeRecord && (latestTimeRecord.status === "present" || latestTimeRecord.status === "undertime") ? "default" : "outline"))}
+                  className={new Date().getDay() === 0 ? "bg-slate-500 hover:bg-slate-600 text-white" : isOnLeave ? "bg-orange-500 hover:bg-orange-600 text-white" : latestTimeRecord?.status === "undertime" ? "bg-amber-500 hover:bg-amber-600 text-white" : latestTimeRecord?.status === "excused" ? "bg-green-600 hover:bg-green-700 text-white" : ""}
                 >
-                  {isOnLeave ? "On Leave" : latestTimeRecord?.status === "undertime" ? "Undertime" : latestTimeRecord?.status === "excused" ? "Excused" : latestTimeRecord?.status === "absent" ? "Absent" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
+                  {new Date().getDay() === 0 ? "Day Off" : isOnLeave ? "On Leave" : latestTimeRecord?.status === "undertime" ? "Undertime" : latestTimeRecord?.status === "excused" ? "Excused" : latestTimeRecord?.status === "absent" ? "Absent" : (latestTimeRecord && latestTimeRecord.status === "present" ? "Present" : "Not Clocked In")}
                 </Badge>
               </div>
 
@@ -510,11 +521,22 @@ export default function EmployeeDashboard() {
                       <div className="font-medium">{formatTime(latestTimeRecord.timeOut)}</div>
                     </div>
                   )}
+                  {latestTimeRecord.timeIn && latestTimeRecord.timeOut && (
+                    <div className="flex justify-between items-center pt-1 border-t">
+                      <div className="text-sm text-muted-foreground">Hours Worked:</div>
+                      <div className="font-medium text-primary">{calculateHoursWorked(latestTimeRecord.timeIn, latestTimeRecord.timeOut)}</div>
+                    </div>
+                  )}
                 </div>
               )}
 
               <div className="pt-2">
-                {isOnLeave ? (
+                {new Date().getDay() === 0 ? (
+                  <div className="text-center space-y-2">
+                    <Badge className="bg-slate-500 hover:bg-slate-600 text-white text-sm px-3 py-1">DAY OFF</Badge>
+                    <p className="text-xs text-muted-foreground">Sunday is a day-off. Clock-in is not available.</p>
+                  </div>
+                ) : isOnLeave ? (
                   <div className="text-center space-y-2">
                     <Badge className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1">ON LEAVE</Badge>
                     <p className="text-xs text-muted-foreground">You are on approved leave until {leaveEndDate}</p>

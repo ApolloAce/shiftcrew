@@ -49,7 +49,6 @@ async function apiFetch(url: string, init?: RequestInit) {
   return res.json()
 }
 
-// Add or replace schedule for a given date
 export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | "updatedAt">): Promise<string> => {
   const data = await apiFetch(API, {
     method: "POST",
@@ -59,7 +58,7 @@ export const addSchedule = async (schedule: Omit<Schedule, "id" | "createdAt" | 
   return data.id
 }
 
-// Get all schedules for a specific date (queries by scheduleFor, the per-day column)
+
 export const getSchedulesForDate = async (date: string): Promise<Schedule[]> => {
   return apiFetch(`${API}?scheduleFor=${date}`)
 }
